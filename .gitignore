@@ -8,3 +8,4 @@ CMakeUserPresets.json
 *.user
 .qtcreator/
 .vs/
+CLAUDE.md
