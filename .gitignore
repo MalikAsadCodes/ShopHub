@@ -1,0 +1,10 @@
+# Build output
+build/
+build-*/
+out/
+
+# IDE / local
+CMakeUserPresets.json
+*.user
+.qtcreator/
+.vs/

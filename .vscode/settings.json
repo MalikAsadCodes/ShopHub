@@ -1,0 +1,11 @@
+{
+    // Your Qt folder. MSYS2: the ucrt64 folder (for example E:/ucrt64, or C:/msys64/ucrt64 by default).
+    // Official Qt installer: C:/Qt/<version>/mingw_64 (look inside C:\Qt).
+    "cmake.configureSettings": {
+        "CMAKE_PREFIX_PATH": "E:/ucrt64"
+    },
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.preferredGenerators": ["Ninja", "MinGW Makefiles"],
+    "cmake.configureOnOpen": true,
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+}
