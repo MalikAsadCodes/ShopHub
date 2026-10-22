@@ -52,4 +52,55 @@ QString stockReasonDisplay(StockReason r)
     return QString();
 }
 
+namespace payment {
+
+QString methodDisplay(const QString &method)
+{
+    if (method == kKhata)
+        return QStringLiteral("Khata");
+    return QStringLiteral("Cash on Delivery");
+}
+
+QString statusDisplay(const QString &status)
+{
+    if (status == kPaid)
+        return QStringLiteral("Paid");
+    if (status == kOnAccount)
+        return QStringLiteral("On khata");
+    return QStringLiteral("Unpaid");
+}
+
+} // namespace payment
+
+QString khataKindToDb(KhataKind k)
+{
+    switch (k) {
+    case KhataKind::Charge: return QStringLiteral("charge");
+    case KhataKind::Payment: return QStringLiteral("payment");
+    case KhataKind::Reversal: return QStringLiteral("reversal");
+    case KhataKind::Adjustment: return QStringLiteral("adjustment");
+    }
+    return QStringLiteral("adjustment");
+}
+
+std::optional<KhataKind> khataKindFromDb(const QString &s)
+{
+    for (KhataKind k : {KhataKind::Charge, KhataKind::Payment, KhataKind::Reversal, KhataKind::Adjustment}) {
+        if (khataKindToDb(k) == s)
+            return k;
+    }
+    return std::nullopt;
+}
+
+QString khataKindDisplay(KhataKind k)
+{
+    switch (k) {
+    case KhataKind::Charge: return QStringLiteral("Order on khata");
+    case KhataKind::Payment: return QStringLiteral("Payment received");
+    case KhataKind::Reversal: return QStringLiteral("Order cancelled");
+    case KhataKind::Adjustment: return QStringLiteral("Adjustment");
+    }
+    return QString();
+}
+
 } // namespace shophub

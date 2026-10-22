@@ -18,11 +18,11 @@ public:
     Result<QVector<OrderStatusChange>> history(const Session &session, qint64 orderId) const;
 
     // Admin: move an order one step forward (Pending -> Confirmed -> ... -> Delivered).
-    // Delivered marks a Cash on Delivery order as paid.
+    // Delivered marks a Cash on Delivery order as paid; khata orders stay "on khata".
     Status advance(const Session &session, qint64 orderId, OrderStatus to, const QString &note = QString());
 
     // Customer (Pending/Confirmed, own orders) or admin (up to Processing).
-    // Cancelling puts the items back into stock.
+    // Cancelling puts the items back into stock and takes a khata order off the khata.
     Status cancel(const Session &session, qint64 orderId, const QString &reason);
 
 private:

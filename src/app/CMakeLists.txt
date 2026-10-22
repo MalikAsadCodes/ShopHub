@@ -14,10 +14,12 @@ qt_add_library(shophub_ui STATIC
     ui/dialogs/AuthDialog.h         ui/dialogs/AuthDialog.cpp
     ui/dialogs/ShopDialogs.h        ui/dialogs/ShopDialogs.cpp
     ui/dialogs/AdminDialogs.h       ui/dialogs/AdminDialogs.cpp
+    ui/dialogs/KhataDialogs.h       ui/dialogs/KhataDialogs.cpp
 
     ui/pages/Page.h                 ui/pages/Page.cpp
     ui/pages/CustomerPages.h        ui/pages/CustomerPages.cpp
     ui/pages/AdminPages.h           ui/pages/AdminPages.cpp
+    ui/pages/KhataPages.h           ui/pages/KhataPages.cpp
 )
 target_include_directories(shophub_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(shophub_ui PUBLIC shophub_core Qt6::Widgets)

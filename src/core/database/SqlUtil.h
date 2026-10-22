@@ -25,6 +25,21 @@ Status execRaw(const QSqlDatabase &db, const QString &statement, const char *con
 bool isUniqueViolation(const QSqlQuery &query);
 
 QString nowUtc();                                  // ISO-8601, UTC, e.g. 2026-10-17T15:30:00Z
+
+// Sample data only: while one of these exists, nowUtc() returns the given time,
+// so backdated sample records (including khata entries, which can never be
+// edited afterwards) are written with a realistic date from the start.
+class ScopedFixedClock
+{
+public:
+    explicit ScopedFixedClock(const QDateTime &utc);
+    ~ScopedFixedClock();
+    ScopedFixedClock(const ScopedFixedClock &) = delete;
+    ScopedFixedClock &operator=(const ScopedFixedClock &) = delete;
+
+private:
+    QString m_previous;
+};
 QString toDb(const QDateTime &dt);                 // ISO-8601 UTC or empty
 QDateTime fromDb(const QVariant &value);           // invalid for NULL/empty
 

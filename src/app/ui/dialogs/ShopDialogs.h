@@ -6,6 +6,7 @@
 #include <QDialog>
 
 class QCheckBox;
+class QRadioButton;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -46,6 +47,7 @@ private:
     QLineEdit *m_address = nullptr;
     QLineEdit *m_city = nullptr;
     QCheckBox *m_saveAddress = nullptr;
+    QRadioButton *m_khata = nullptr;
     QLabel *m_error = nullptr;
     QPushButton *m_placeButton = nullptr;
 };

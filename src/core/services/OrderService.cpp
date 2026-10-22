@@ -73,8 +73,11 @@ Status OrderService::advance(const Session &session, qint64 orderId, OrderStatus
         return Status::fail(QStringLiteral("An order cannot go from %1 to %2.")
                                 .arg(orderstatus::displayName(from), orderstatus::displayName(to)));
 
-    const QString payment = to == OrderStatus::Delivered ? QStringLiteral("paid") : order.value().paymentStatus;
-    if (auto st = m_repos.orders.updateStatus(orderId, to, payment); !st)
+    // Cash on Delivery is paid when delivered. A khata order stays "on khata":
+    // the customer pays the khata later, not the single order.
+    const bool cod = order.value().paymentMethod == payment::kCashOnDelivery;
+    const QString paymentStatus = (to == OrderStatus::Delivered && cod) ? payment::kPaid : order.value().paymentStatus;
+    if (auto st = m_repos.orders.updateStatus(orderId, to, paymentStatus); !st)
         return st;
     if (auto st = m_repos.orders.addHistory(orderId, from, to, session.userId(), note.trimmed()); !st)
         return st;
@@ -121,6 +124,22 @@ Status OrderService::cancel(const Session &session, qint64 orderId, const QStrin
                                                       StockReason::CancelRestock, o.orderNumber, session.userId());
             !st)
             return st;
+    }
+
+    // A khata order that is cancelled comes off the customer's khata.
+    if (o.paymentMethod == payment::kKhata) {
+        auto charged = m_repos.khata.hasEntry(orderId, KhataKind::Charge);
+        if (!charged)
+            return charged.status();
+        auto reversed = m_repos.khata.hasEntry(orderId, KhataKind::Reversal);
+        if (!reversed)
+            return reversed.status();
+        if (charged.value() && !reversed.value()) {
+            auto after = m_repos.khata.append(o.userId, KhataKind::Reversal, Money() - o.total, orderId,
+                                              o.orderNumber, session.userId());
+            if (!after)
+                return after.status();
+        }
     }
 
     const QString note = reason.trimmed().isEmpty()

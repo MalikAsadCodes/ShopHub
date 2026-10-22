@@ -27,6 +27,7 @@ signals:
     void cartChanged();
     void ordersChanged();
     void catalogChanged();
+    void khataChanged();
     void toast(const QString &message);
     void openShop(qint64 categoryId, const QString &searchText);
     void openProduct(qint64 productId);

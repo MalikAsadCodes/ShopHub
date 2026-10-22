@@ -71,4 +71,42 @@ private:
     QVector<InventoryMovement> m_rows;
 };
 
+// Customers with their khata limit and balance (admin).
+class KhataAccountTableModel : public QAbstractTableModel
+{
+    Q_OBJECT
+public:
+    explicit KhataAccountTableModel(QObject *parent = nullptr);
+
+    void setAccounts(QVector<KhataAccount> accounts);
+    const KhataAccount *accountAt(int row) const;
+
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    int columnCount(const QModelIndex &parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+
+private:
+    QVector<KhataAccount> m_rows;
+};
+
+// Ledger lines, newest first. The customer view hides the "By" column.
+class KhataEntryTableModel : public QAbstractTableModel
+{
+    Q_OBJECT
+public:
+    explicit KhataEntryTableModel(bool showAuthor, QObject *parent = nullptr);
+
+    void setEntries(QVector<KhataEntry> entries);
+
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    int columnCount(const QModelIndex &parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+
+private:
+    bool m_showAuthor;
+    QVector<KhataEntry> m_rows;
+};
+
 } // namespace shophub::ui

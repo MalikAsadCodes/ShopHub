@@ -9,15 +9,18 @@
 #include "ui/Theme.h"
 #include "ui/dialogs/AdminDialogs.h"
 #include "ui/dialogs/AuthDialog.h"
+#include "ui/dialogs/KhataDialogs.h"
 #include "ui/dialogs/ShopDialogs.h"
 #include "ui/pages/Page.h"
 #include "ui/widgets/ProductCard.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDir>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QTableView>
 
 using namespace shophub;
@@ -30,6 +33,14 @@ QPushButton *buttonWithText(QWidget *root, const QString &text)
     for (QPushButton *b : root->findChildren<QPushButton *>())
         if (b->text() == text && b->isVisible())
             return b;
+    return nullptr;
+}
+
+QRadioButton *radioWithText(QWidget *root, const QString &text)
+{
+    for (QRadioButton *r : root->findChildren<QRadioButton *>())
+        if (r->text() == text)
+            return r;
     return nullptr;
 }
 
@@ -180,6 +191,101 @@ private slots:
         shot(&orderDialog, "09-order-details");
     }
 
+    void customerBuysOnKhata()
+    {
+        MainWindow window(*m_ctx, m_customer);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QVERIFY(window.page(QStringLiteral("khata")));
+        const KhataAccount before = m_ctx->khata().myAccount(m_customer).value();
+        QVERIFY(before.creditLimit > Money()); // the hinted sample account has a khata
+
+        // Too big for the available credit: the khata option is switched off.
+        ProductFilter f;
+        f.text = QStringLiteral("Atomic Habits");
+        const qint64 book = m_ctx->catalog().search(m_customer, f).value().items.first().id;
+        f.text = QStringLiteral("Air Fryer");
+        auto big = m_ctx->catalog().search(m_customer, f).value().items;
+        QVERIFY(!big.isEmpty());
+        QVERIFY(big.first().price > before.available());
+        QVERIFY(m_ctx->cart().add(m_customer, big.first().id, 1).isOk());
+        {
+            CheckoutDialog checkout(window.uiContext(), &window);
+            checkout.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&checkout));
+            QVERIFY(!radioWithText(&checkout, QStringLiteral("Khata (pay later)"))->isEnabled());
+        }
+        QVERIFY(m_ctx->cart().clear(m_customer).isOk());
+
+        // Small enough: pay with khata.
+        QVERIFY(m_ctx->cart().add(m_customer, book, 1).isOk());
+        CheckoutDialog checkout(window.uiContext(), &window);
+        checkout.resize(960, 640);
+        checkout.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&checkout));
+        QRadioButton *khata = radioWithText(&checkout, QStringLiteral("Khata (pay later)"));
+        QVERIFY(khata && khata->isEnabled());
+        QTest::mouseClick(khata, Qt::LeftButton);
+        QVERIFY(khata->isChecked());
+        shot(&checkout, "07b-checkout-khata");
+        QPushButton *place = nullptr;
+        for (QPushButton *b : checkout.findChildren<QPushButton *>())
+            if (b->text().startsWith(QStringLiteral("Place order")))
+                place = b;
+        QTest::mouseClick(place, Qt::LeftButton);
+        QCOMPARE(checkout.result(), int(QDialog::Accepted));
+        QCOMPARE(checkout.placedOrder().paymentMethod, payment::kKhata);
+        QCOMPARE(m_ctx->khata().myAccount(m_customer).value().balance, before.balance + checkout.placedOrder().total);
+
+        window.navigate(QStringLiteral("khata"));
+        QTest::qWait(20);
+        auto *ledger = window.page(QStringLiteral("khata"))->findChild<QTableView *>();
+        QVERIFY(ledger);
+        QVERIFY(ledger->model()->rowCount() >= 4);
+        QCOMPARE(ledger->model()->index(0, 2).data().toString(), checkout.placedOrder().orderNumber);
+        shot(&window, "08b-my-khata");
+    }
+
+    void adminRecordsKhataPayment()
+    {
+        MainWindow window(*m_ctx, m_admin);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.navigate(QStringLiteral("khata"));
+        Page *page = window.page(QStringLiteral("khata"));
+        auto tables = page->findChildren<QTableView *>();
+        QCOMPARE(tables.size(), 2);
+        QCOMPARE(tables.first()->model()->rowCount(), 50); // every customer is listed
+        QVERIFY(tables.last()->model()->rowCount() > 0);    // ledger of the top debtor
+        QTest::qWait(20);
+        shot(&window, "17-admin-khata");
+
+        page->applySearch(QStringLiteral("ayesha.khan"));
+        QCOMPARE(tables.first()->model()->rowCount(), 1);
+
+        const KhataAccount ayesha = m_ctx->khata().account(m_admin, m_customer.userId()).value();
+        KhataDialog dialog(window.uiContext(), ayesha, KhataDialog::Mode::RecordPayment, &window);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        QLineEdit *amount = fieldWithPlaceholder(&dialog, QStringLiteral("Amount received"));
+        QVERIFY(amount);
+        amount->setText(QStringLiteral("5000"));
+        shot(&dialog, "18-khata-payment");
+        QTest::mouseClick(buttonWithText(&dialog, QStringLiteral("Record payment")), Qt::LeftButton);
+        QCOMPARE(dialog.result(), int(QDialog::Accepted));
+        QCOMPARE(m_ctx->khata().account(m_admin, m_customer.userId()).value().balance,
+                 ayesha.balance - Money::fromRupees(5000));
+
+        // Asking for more than is owed is refused with a message, and nothing is saved.
+        const KhataAccount after = m_ctx->khata().account(m_admin, m_customer.userId()).value();
+        KhataDialog tooMuch(window.uiContext(), after, KhataDialog::Mode::RecordPayment, &window);
+        tooMuch.show();
+        fieldWithPlaceholder(&tooMuch, QStringLiteral("Amount received"))->setText(QStringLiteral("999999"));
+        QTest::mouseClick(buttonWithText(&tooMuch, QStringLiteral("Record payment")), Qt::LeftButton);
+        QVERIFY(tooMuch.result() != QDialog::Accepted);
+        QCOMPARE(m_ctx->khata().account(m_admin, m_customer.userId()).value().balance, after.balance);
+    }
+
     void adminPagesWork()
     {
         MainWindow window(*m_ctx, m_admin);
@@ -244,5 +350,25 @@ private:
     Session m_customer;
 };
 
-QTEST_MAIN(TestGui)
+// Uses Qt's invisible "offscreen" display when this Qt can really load it, and the
+// normal display otherwise (the windows then appear briefly while the test runs).
+// Checked at run time, because a copy of Qt placed next to the exe (as windeployqt
+// does on Windows) can only load the plugins that were copied with it.
+int main(int argc, char **argv)
+{
+    {
+        QCoreApplication probe(argc, argv);
+        bool haveOffscreen = false;
+        for (const QString &path : QCoreApplication::libraryPaths())
+            haveOffscreen = haveOffscreen || !QDir(path + QStringLiteral("/platforms"))
+                                                  .entryList({QStringLiteral("*qoffscreen*")}).isEmpty();
+        if (haveOffscreen && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+            qputenv("QT_QPA_PLATFORM", "offscreen");
+        else if (!haveOffscreen && qgetenv("QT_QPA_PLATFORM") == "offscreen")
+            qunsetenv("QT_QPA_PLATFORM");
+    }
+    QApplication app(argc, argv);
+    TestGui test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "tst_gui.moc"

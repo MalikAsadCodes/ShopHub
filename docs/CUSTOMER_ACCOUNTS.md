@@ -62,4 +62,21 @@ ShopHub creates these 50 customer accounts. Sign in with any of them to try the 
 | 49 | Tahir Mirza | `tahir.mirza@example.com` | `Tahir123` | Gujranwala |
 | 50 | Sadia Ijaz | `sadia.ijaz@example.com` | `Sadia123` | Peshawar |
 
+## Customers with a khata (credit account)
+
+Eight sample customers have a khata. Seven of them bought on khata and still owe the shop
+(Rs 87,899 in total when the sample data is loaded); Aimal's khata is open but unused.
+Sign in as one of them and choose **Khata (pay later)** at checkout, or open **My khata**.
+
+| Customer | Credit limit | Owes after setup | What happened |
+|---|---:|---:|---|
+| Ayesha Khan | Rs 30,000 | Rs 16,677 | Paid an earlier order in cash; one khata order was cancelled and taken off |
+| Akram Javed | Rs 40,000 | Rs 8,799 | Shop rounded off Rs 393, paid Rs 22,000 by bank transfer, then a new order |
+| Aimal Durrani | Rs 10,000 | Rs 0 | Khata open, not used yet |
+| Rahab Fatima | Rs 30,000 | Rs 13,389 | Paid in two parts (Easypaisa, cash) |
+| Hira Qureshi | Rs 20,000 | Rs 10,000 | Paid Rs 6,499 by JazzCash |
+| Hassan Raza | Rs 15,000 | Rs 6,990 | Paid everything in cash, then bought again |
+| Danish Rasheed | Rs 20,000 | Rs 17,547 | Close to the limit; one khata order was cancelled |
+| Adeel Sheikh | Rs 50,000 | Rs 14,497 | Paid Rs 10,000 by bank transfer |
+
 The administrator account is never part of the sample data: you create it yourself on first run.

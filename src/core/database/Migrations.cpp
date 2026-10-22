@@ -184,6 +184,98 @@ INSERT INTO app_settings (key, value) VALUES
     };
 }
 
+// --------------------------------------------------------------------------
+// Migration 2: Khata (credit ledger) for Pakistan Retail Edition.
+//  - orders may now be paid "on account" (payment_method 'khata')
+//  - khata_accounts: one credit limit per customer
+//  - khata_entries: append-only ledger. amount > 0 raises what the customer
+//    owes (a sale on credit), amount < 0 lowers it (payment, cancelled order).
+//    The balance is the sum of the entries. It goes below zero only when a
+//    khata order is cancelled after being paid: the shop then owes the
+//    customer an advance, which is used up by the next khata order.
+// --------------------------------------------------------------------------
+QStringList migration2()
+{
+    return {
+        // Rebuild orders with wider CHECK constraints (the recommended SQLite procedure).
+        QStringLiteral(R"(
+CREATE TABLE orders_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number    TEXT    NOT NULL UNIQUE,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    status          TEXT    NOT NULL CHECK (status IN ('pending', 'confirmed', 'processing',
+                                                       'shipped', 'delivered', 'cancelled')),
+    subtotal_paisa  INTEGER NOT NULL CHECK (subtotal_paisa >= 0),
+    shipping_paisa  INTEGER NOT NULL CHECK (shipping_paisa >= 0),
+    tax_paisa       INTEGER NOT NULL CHECK (tax_paisa >= 0),
+    total_paisa     INTEGER NOT NULL CHECK (total_paisa = subtotal_paisa + shipping_paisa + tax_paisa),
+    payment_method  TEXT    NOT NULL CHECK (payment_method IN ('cod', 'khata')),
+    payment_status  TEXT    NOT NULL CHECK (payment_status IN ('unpaid', 'paid', 'on_account')),
+    ship_name       TEXT    NOT NULL,
+    ship_phone      TEXT    NOT NULL,
+    ship_line1      TEXT    NOT NULL,
+    ship_city       TEXT    NOT NULL,
+    checkout_token  TEXT    NOT NULL UNIQUE,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+))"),
+        QStringLiteral(R"(
+INSERT INTO orders_new (id, order_number, user_id, status, subtotal_paisa, shipping_paisa, tax_paisa,
+                        total_paisa, payment_method, payment_status, ship_name, ship_phone, ship_line1,
+                        ship_city, checkout_token, created_at, updated_at)
+SELECT id, order_number, user_id, status, subtotal_paisa, shipping_paisa, tax_paisa,
+       total_paisa, payment_method, payment_status, ship_name, ship_phone, ship_line1,
+       ship_city, checkout_token, created_at, updated_at
+FROM orders)"),
+        QStringLiteral("DROP TABLE orders"),
+        QStringLiteral("ALTER TABLE orders_new RENAME TO orders"),
+        QStringLiteral("CREATE INDEX idx_orders_user ON orders(user_id)"),
+        QStringLiteral("CREATE INDEX idx_orders_status ON orders(status)"),
+        QStringLiteral("CREATE INDEX idx_orders_created ON orders(created_at)"),
+
+        QStringLiteral(R"(
+CREATE TABLE khata_accounts (
+    user_id             INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE RESTRICT,
+    credit_limit_paisa  INTEGER NOT NULL DEFAULT 0 CHECK (credit_limit_paisa >= 0),
+    created_at          TEXT    NOT NULL,
+    updated_at          TEXT    NOT NULL
+))"),
+        QStringLiteral(R"(
+CREATE TABLE khata_entries (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    kind                 TEXT    NOT NULL CHECK (kind IN ('charge', 'payment', 'reversal', 'adjustment')),
+    amount_paisa         INTEGER NOT NULL CHECK (amount_paisa <> 0),
+    balance_after_paisa  INTEGER NOT NULL,
+    order_id             INTEGER REFERENCES orders(id) ON DELETE RESTRICT,
+    note                 TEXT    NOT NULL DEFAULT '',
+    created_by           INTEGER REFERENCES users(id),
+    created_at           TEXT    NOT NULL,
+    CHECK ((kind = 'charge'   AND amount_paisa > 0 AND order_id IS NOT NULL)
+        OR (kind = 'reversal' AND amount_paisa < 0 AND order_id IS NOT NULL)
+        OR (kind = 'payment'  AND amount_paisa < 0)
+        OR (kind = 'adjustment'))
+))"),
+        QStringLiteral("CREATE INDEX idx_khata_user ON khata_entries(user_id, id)"),
+        // An order can be put on account once and reversed once.
+        QStringLiteral("CREATE UNIQUE INDEX idx_khata_one_charge ON khata_entries(order_id) WHERE kind = 'charge'"),
+        QStringLiteral("CREATE UNIQUE INDEX idx_khata_one_reversal ON khata_entries(order_id) WHERE kind = 'reversal'"),
+        // A ledger is a history: entries are never edited or deleted, only corrected by new entries.
+        QStringLiteral(R"(
+CREATE TRIGGER trg_khata_entries_no_update
+BEFORE UPDATE ON khata_entries
+BEGIN
+    SELECT RAISE(ABORT, 'khata entries are immutable');
+END)"),
+        QStringLiteral(R"(
+CREATE TRIGGER trg_khata_entries_no_delete
+BEFORE DELETE ON khata_entries
+BEGIN
+    SELECT RAISE(ABORT, 'khata entries cannot be deleted');
+END)"),
+    };
+}
+
 } // namespace
 
 Migrator::Migrator(QString connectionName)
@@ -195,6 +287,7 @@ const QVector<Migration> &Migrator::migrations()
 {
     static const QVector<Migration> all = {
         {1, QStringLiteral("initial_schema"), migration1()},
+        {2, QStringLiteral("khata_ledger"), migration2(), true},
     };
     return all;
 }
@@ -236,6 +329,24 @@ Status Migrator::migrate()
         if (m.version <= current)
             continue;
 
+        // Table rebuilds need foreign keys off. The pragma is ignored inside a
+        // transaction, so switch it before BEGIN and always switch it back on.
+        struct ForeignKeysGuard
+        {
+            const QSqlDatabase &db;
+            bool active = false;
+            ~ForeignKeysGuard()
+            {
+                if (active)
+                    sql::execRaw(db, QStringLiteral("PRAGMA foreign_keys = ON"), "Migrator::restoreForeignKeys");
+            }
+        } fkGuard{db};
+        if (m.rebuildsTables) {
+            if (auto st = sql::execRaw(db, QStringLiteral("PRAGMA foreign_keys = OFF"), "Migrator::migrate"); !st)
+                return st;
+            fkGuard.active = true;
+        }
+
         Transaction tx(m_connection);
         if (auto st = tx.begin(); !st)
             return st;
@@ -243,6 +354,18 @@ Status Migrator::migrate()
         for (const QString &statement : m.statements) {
             if (auto st = sql::execRaw(db, statement, "Migrator::migrate"); !st) {
                 qCritical().noquote() << "Migration" << m.version << m.name << "failed";
+                return Status::fail(QStringLiteral("Database upgrade failed. See the log file for details."));
+            }
+        }
+
+        if (m.rebuildsTables) {
+            // Every reference must still point at a real row before we commit.
+            QSqlQuery check(db);
+            if (!check.exec(QStringLiteral("PRAGMA foreign_key_check")))
+                return sql::failure(check, "Migrator::foreignKeyCheck");
+            if (check.next()) {
+                qCritical().noquote() << "Migration" << m.version << m.name
+                                      << "broke a foreign key in table" << check.value(0).toString();
                 return Status::fail(QStringLiteral("Database upgrade failed. See the log file for details."));
             }
         }

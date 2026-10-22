@@ -4,6 +4,7 @@
 #include "services/AppContext.h"
 
 #include <QHash>
+#include <QSet>
 #include <QSqlQuery>
 #include <QtDebug>
 
@@ -162,14 +163,19 @@ struct DemoOrder
     int daysAgo;
 };
 
-// Moves an order (and its status history) back in time, including the date inside
-// its order number (SH-yyyyMMdd-XXXXXX). `index` spreads orders placed on the same
-// day over different times of day.
-Status backdateOrder(const QString &connection, qint64 orderId, int daysAgo, int index)
+// When sample order number `index` was placed. Orders placed on the same day are
+// spread over different times of day.
+QDateTime sampleTime(int daysAgo, int index)
 {
     const qint64 minutesBack = daysAgo == 0 ? 5 + (index * 7) % 50     // today: within the last hour
                                             : (index * 97) % (10 * 60); // earlier days: up to 10 hours earlier
-    const QDateTime whenUtc = QDateTime::currentDateTimeUtc().addDays(-daysAgo).addSecs(-60 * minutesBack);
+    return QDateTime::currentDateTimeUtc().addDays(-daysAgo).addSecs(-60 * minutesBack);
+}
+
+// Moves an order (and its status history) back in time, including the date inside
+// its order number (SH-yyyyMMdd-XXXXXX).
+Status backdateOrder(const QString &connection, qint64 orderId, const QDateTime &whenUtc)
+{
     const QString when = sql::toDb(whenUtc);
     const QString numberPrefix = QStringLiteral("SH-") + whenUtc.toLocalTime().date().toString(QStringLiteral("yyyyMMdd"));
 
@@ -192,6 +198,41 @@ Status backdateOrder(const QString &connection, qint64 orderId, int daysAgo, int
     }
     return Status::ok();
 }
+
+// ---------------------------------------------------------------- Khata sample data
+// Seven regular customers buy on khata; one more has a khata that is open but unused.
+struct KhataLimitRow
+{
+    int customer;
+    qint64 limitRupees;
+};
+const KhataLimitRow kKhataLimits[] = {
+    {0, 30000}, {2, 40000}, {4, 10000}, {5, 30000}, {11, 20000}, {18, 15000}, {26, 20000}, {32, 50000},
+};
+
+// Indexes into sampleOrders() that are paid on khata instead of Cash on Delivery.
+const int kKhataOrders[] = {12, 14, 21, 26, 28, 29, 33, 40, 42, 43, 46, 48, 50, 51, 53, 54, 55, 56, 61, 65, 70};
+
+// Money the customers brought to the shop. rupees = 0 means "everything owed".
+// Negative adjustments lower what the customer owes.
+struct KhataEventRow
+{
+    int customer;
+    int daysAgo;
+    KhataKind kind;
+    qint64 rupees;
+    const char *note;
+};
+const KhataEventRow kKhataEvents[] = {
+    {2, 9, KhataKind::Adjustment, -393, "Rounded off the bill"},
+    {2, 8, KhataKind::Payment, 22000, "Bank transfer"},
+    {5, 10, KhataKind::Payment, 5000, "Easypaisa"},
+    {0, 7, KhataKind::Payment, 0, "Cash"},
+    {18, 5, KhataKind::Payment, 0, "Cash"},
+    {5, 3, KhataKind::Payment, 3000, "Cash"},
+    {11, 2, KhataKind::Payment, 6499, "JazzCash"},
+    {32, 1, KhataKind::Payment, 10000, "Bank transfer"},
+};
 
 const QVector<DemoOrder> &sampleOrders()
 {
@@ -296,6 +337,11 @@ int DemoSeeder::sampleOrderCount()
     return int(sampleOrders().size());
 }
 
+int DemoSeeder::sampleKhataCustomerCount()
+{
+    return int(std::size(kKhataLimits));
+}
+
 bool DemoSeeder::isLoaded(AppContext &ctx)
 {
     auto v = ctx.settings().get(QStringLiteral("demo_data_loaded"), QStringLiteral("0"));
@@ -363,10 +409,48 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
         customers.push_back(session.value());
     }
 
+    // Khata: credit limits from the start of the sample period.
+    {
+        sql::ScopedFixedClock clock(sampleTime(21, 0));
+        for (const KhataLimitRow &k : kKhataLimits) {
+            if (auto st = ctx.khata().setLimit(admin, customers[k.customer].userId(), Money::fromRupees(k.limitRupees)); !st)
+                return st;
+        }
+    }
+    const QSet<int> khataOrders(std::begin(kKhataOrders), std::end(kKhataOrders));
+    int nextEvent = 0;
+    auto runKhataEventsBefore = [&](int daysAgo) -> Status {
+        // Every payment or adjustment that happened before an order placed `daysAgo` days ago.
+        while (nextEvent < int(std::size(kKhataEvents)) && kKhataEvents[nextEvent].daysAgo > daysAgo) {
+            const KhataEventRow &e = kKhataEvents[nextEvent++];
+            sql::ScopedFixedClock clock(QDateTime::currentDateTimeUtc().addDays(-e.daysAgo).addSecs(-3600));
+            const qint64 userId = customers[e.customer].userId();
+            if (e.kind == KhataKind::Payment) {
+                Money amount = Money::fromRupees(e.rupees);
+                if (e.rupees == 0) {
+                    auto account = ctx.khata().account(admin, userId);
+                    if (!account)
+                        return account.status();
+                    amount = account.value().balance;
+                }
+                if (auto r = ctx.khata().recordPayment(admin, userId, amount, QString::fromLatin1(e.note)); !r)
+                    return r.status();
+            } else {
+                if (auto r = ctx.khata().adjust(admin, userId, Money::fromRupees(e.rupees), QString::fromLatin1(e.note)); !r)
+                    return r.status();
+            }
+        }
+        return Status::ok();
+    };
+
     for (int i = 0; i < orders.size(); ++i) {
         const DemoOrder &o = orders[i];
         const Session &customer = customers[o.customer];
         const SampleAccount &info = accounts[o.customer];
+        if (auto st = runKhataEventsBefore(o.daysAgo); !st)
+            return st;
+        const QDateTime placedAt = sampleTime(o.daysAgo, i);
+        sql::ScopedFixedClock clock(placedAt);
         for (const auto &item : o.items) {
             if (auto st = ctx.cart().add(customer, productIds.value(QString::fromLatin1(item.first)), item.second); !st)
                 return st;
@@ -374,6 +458,7 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
         CheckoutRequest req;
         req.checkoutToken = CheckoutService::newCheckoutToken();
         req.shipping = {info.fullName, info.phone, info.address, info.city};
+        req.paymentMethod = khataOrders.contains(i) ? payment::kKhata : payment::kCashOnDelivery;
         auto placed = ctx.checkout().placeOrder(customer, req);
         if (!placed)
             return placed.status();
@@ -392,9 +477,12 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
                 current = next;
             }
         }
-        if (auto st = backdateOrder(ctx.connectionName(), orderId, o.daysAgo, i); !st)
+        if (auto st = backdateOrder(ctx.connectionName(), orderId, placedAt); !st)
             return st;
     }
+
+    if (auto st = runKhataEventsBefore(-1); !st)
+        return st;
 
     if (auto st = ctx.settings().set(QStringLiteral("demo_data_loaded"), QStringLiteral("1")); !st)
         return st;

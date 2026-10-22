@@ -24,7 +24,7 @@ struct CheckoutRequest
     // creating a duplicate.
     QString checkoutToken;
     ShippingDetails shipping;
-    QString paymentMethod = QStringLiteral("cod"); // v1 supports Cash on Delivery only
+    QString paymentMethod = QStringLiteral("cod"); // "cod" or "khata" (needs a credit limit)
     bool saveAsDefaultAddress = true;
 };
 

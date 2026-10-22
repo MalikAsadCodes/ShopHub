@@ -211,6 +211,12 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
     cod->setChecked(true);
     lv->addWidget(cod);
     lv->addWidget(makeLabel(QStringLiteral("Pay in cash when your order arrives."), "small"));
+    m_khata = new QRadioButton(QStringLiteral("Khata (pay later)"));
+    m_khata->setAccessibleName(QStringLiteral("Pay with khata"));
+    lv->addWidget(m_khata);
+    auto *khataHint = makeLabel(QString(), "small");
+    khataHint->setWordWrap(true);
+    lv->addWidget(khataHint);
     auto *online = new QRadioButton(QStringLiteral("Card / JazzCash / Easypaisa  (coming soon)"));
     online->setEnabled(false);
     lv->addWidget(online);
@@ -247,6 +253,22 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
         rv->addLayout(summaryRow(QStringLiteral("Tax"), price.tax.toString()));
     rv->addWidget(makeDivider());
     rv->addLayout(summaryRow(QStringLiteral("Total"), price.total.toString(), true));
+
+    // Khata is offered only when the shop has given this customer a credit limit.
+    // The final check happens again in CheckoutService when the order is placed.
+    auto khata = ui.app.khata().myAccount(ui.session);
+    if (!khata || khata.value().creditLimit.isZero()) {
+        m_khata->setEnabled(false);
+        khataHint->setText(QStringLiteral("Khata is not open for your account. Ask the shop to give you a credit limit."));
+    } else {
+        const KhataAccount &k = khata.value();
+        const bool fits = k.balance + price.total <= k.creditLimit;
+        m_khata->setEnabled(fits);
+        khataHint->setText(fits ? QStringLiteral("Available credit %1 of your %2 limit. Pay the shop later.")
+                                      .arg(k.available().toString(), k.creditLimit.toString())
+                                : QStringLiteral("Available credit is %1, less than this order. Pay some of your khata first.")
+                                      .arg(k.available().toString()));
+    }
 
     const Money threshold = ui.app.pricing().rules().freeShippingThreshold;
     if (!price.shipping.isZero() && price.subtotal < threshold)
@@ -288,6 +310,7 @@ void CheckoutDialog::placeOrder()
     req.checkoutToken = m_token;
     req.shipping = {m_name->text(), m_phone->text(), m_address->text(), m_city->text()};
     req.saveAsDefaultAddress = m_saveAddress->isChecked();
+    req.paymentMethod = m_khata->isChecked() ? payment::kKhata : payment::kCashOnDelivery;
 
     auto result = m_ui.app.checkout().placeOrder(m_ui.session, req);
     if (!result) {
@@ -344,9 +367,16 @@ void OrderDetailsDialog::reload()
     header->addStretch();
     v->addLayout(header);
 
-    QString meta = QStringLiteral("Placed %1  ·  Cash on Delivery  ·  %2")
-                       .arg(formatDateTime(m_order.createdAt),
-                            m_order.paymentStatus == QLatin1String("paid") ? QStringLiteral("Paid") : QStringLiteral("Payment due on delivery"));
+    QString paymentNote;
+    if (m_order.paymentStatus == payment::kPaid)
+        paymentNote = QStringLiteral("Paid");
+    else if (m_order.paymentMethod == payment::kKhata)
+        paymentNote = m_order.status == OrderStatus::Cancelled ? QStringLiteral("Taken off the khata")
+                                                               : QStringLiteral("Added to the khata");
+    else
+        paymentNote = QStringLiteral("Payment due on delivery");
+    QString meta = QStringLiteral("Placed %1  ·  %2  ·  %3")
+                       .arg(formatDateTime(m_order.createdAt), payment::methodDisplay(m_order.paymentMethod), paymentNote);
     if (m_ui.session.isAdmin())
         meta += QStringLiteral("\nCustomer: %1 (%2)").arg(m_order.customerName, m_order.customerEmail);
     v->addWidget(makeLabel(meta, "muted"));

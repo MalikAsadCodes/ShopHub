@@ -167,8 +167,8 @@ struct Order
     Money shipping;
     Money tax;
     Money total;
-    QString paymentMethod;  // "cod"
-    QString paymentStatus;  // "unpaid" | "paid"
+    QString paymentMethod;  // "cod" | "khata"
+    QString paymentStatus;  // "unpaid" | "paid" | "on_account"
     QString shipName;
     QString shipPhone;
     QString shipLine1;
@@ -209,6 +209,55 @@ struct InventoryMovement
     QDateTime createdAt;
 };
 
+// ---------------------------------------------------------------- Khata (credit ledger)
+namespace payment {
+inline const QString kCashOnDelivery = QStringLiteral("cod");
+inline const QString kKhata = QStringLiteral("khata");
+inline const QString kUnpaid = QStringLiteral("unpaid");
+inline const QString kPaid = QStringLiteral("paid");
+inline const QString kOnAccount = QStringLiteral("on_account");
+
+QString methodDisplay(const QString &method);   // "Cash on Delivery", "Khata"
+QString statusDisplay(const QString &status);   // "Unpaid", "Paid", "On khata"
+} // namespace payment
+
+// charge: an order bought on credit (raises the balance)
+// payment: money received from the customer (lowers it)
+// reversal: a khata order was cancelled (lowers it)
+// adjustment: a correction or write-off by the shop, with a note (either way)
+enum class KhataKind { Charge, Payment, Reversal, Adjustment };
+
+QString khataKindToDb(KhataKind k);
+std::optional<KhataKind> khataKindFromDb(const QString &s);
+QString khataKindDisplay(KhataKind k);
+
+struct KhataEntry
+{
+    qint64 id = 0;
+    qint64 userId = 0;
+    KhataKind kind = KhataKind::Charge;
+    Money amount;        // > 0 raises what the customer owes, < 0 lowers it
+    Money balanceAfter;
+    qint64 orderId = 0;  // 0 when not linked to an order
+    QString orderNumber;
+    QString note;
+    QString createdBy;
+    QDateTime createdAt;
+};
+
+struct KhataAccount
+{
+    qint64 userId = 0;
+    QString customerName;
+    QString email;
+    Money creditLimit;   // 0 = no credit allowed
+    Money balance;       // what the customer owes right now (< 0 = advance held by the shop)
+    QDateTime lastActivity; // invalid when there are no entries
+
+    Money available() const { return balance >= creditLimit ? Money() : creditLimit - balance; }
+    bool overLimit() const { return balance > creditLimit; }
+};
+
 // ---------------------------------------------------------------- Dashboard
 struct TopProduct
 {
@@ -232,6 +281,8 @@ struct DashboardStats
     int pendingOrders = 0;   // pending + confirmed + processing
     int lowStockCount = 0;
     int customerCount = 0;
+    Money khataOutstanding;  // total owed by all customers on khata
+    int khataDebtors = 0;    // customers whose khata balance is above zero
     QVector<TopProduct> topProducts;
     QVector<DailySales> last14Days;
     QVector<Order> recentOrders;

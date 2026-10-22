@@ -1,21 +1,40 @@
 # ShopHub
 
 A desktop e-commerce application built with **C++17**, **Qt 6 Widgets** and **SQLite**.
-Customers browse a catalog, keep a cart, check out with Cash on Delivery and track
-their orders. Store admins get a dashboard, product and category management,
-inventory with a full stock history, and order fulfilment.
+Customers browse a catalog, keep a cart, check out with Cash on Delivery or on their
+**khata** (shop credit) and track their orders. Store admins get a dashboard, product and
+category management, inventory with a full stock history, order fulfilment and a khata book.
 
-This is **version 1**. See [Roadmap](#roadmap) for what comes next.
+This is **version 2 - Pakistan Retail Edition** (in progress). Milestone 1, **Khata**, is done.
+See [Roadmap](#roadmap) for what comes next.
 
 | Customer home | Admin dashboard |
 |---|---|
 | ![Home](docs/screenshots/home.png) | ![Dashboard](docs/screenshots/dashboard.png) |
-| **Cart** | **Dark theme** |
-| ![Cart](docs/screenshots/cart.png) | ![Shop, dark](docs/screenshots/shop-dark.png) |
+| **Khata (admin)** | **My khata (customer)** |
+| ![Khata](docs/screenshots/khata.png) | ![My khata](docs/screenshots/my-khata.png) |
+| **Checkout with khata** | **Dark theme** |
+| ![Checkout](docs/screenshots/checkout.png) | ![Shop, dark](docs/screenshots/shop-dark.png) |
 
 More in [`docs/screenshots`](docs/screenshots).
 
 ---
+
+## What's new in v2
+
+**Khata (credit book)**, the way Pakistani shops have always sold to regulars:
+
+- The admin gives a trusted customer a **credit limit** (0 = no khata)
+- At checkout the customer chooses **Cash on Delivery** or **Khata (pay later)**. Khata is offered
+  only when the order fits in their available credit; the limit is checked again when the order is saved
+- **My khata** page for customers: what they owe, their limit, available credit and full history
+- **Khata** page for admins: every customer with limit, balance and last activity, sorted by who owes most,
+  plus each customer's ledger. Record payments (cash, Easypaisa, JazzCash, bank transfer, cheque) and
+  adjustments (discount, write-off, correction - a reason is required)
+- Cancelling a khata order takes it off the khata automatically
+- Dashboard shows **Khata outstanding** and how many customers owe
+- The ledger can never be edited or deleted, only corrected with a new entry (enforced by the database)
+- Your v1 database is upgraded automatically on first start, keeping all data
 
 ## Features (v1)
 
@@ -42,7 +61,7 @@ More in [`docs/screenshots`](docs/screenshots).
 - Double-click protection: each checkout has a token, so submitting twice never creates two orders
 - Versioned database **migrations**, foreign keys switched on and verified, CHECK constraints, immutable order lines
 - Light and dark themes, keyboard shortcuts, log file
-- 10 automated test suites (unit, database integration and GUI journeys)
+- 11 automated test suites (unit, database integration and GUI journeys)
 
 ---
 
@@ -122,6 +141,7 @@ Tested with GCC 16.2, CMake 4.4 and Qt 6.11.2. In VS Code, set `CMAKE_PREFIX_PAT
    27 products, **50 customer accounts** with Pakistani names and about 70 orders in every state
    (pending to delivered, plus a few cancelled) spread over the last three weeks. Setup takes a few seconds.
 3. Sign out (top-right menu) and sign in as any sample customer to try shopping.
+   Eight of them have a khata, including Ayesha Khan below (limit Rs 30,000).
    **Every sample password is the customer's first name + `123`.** For example:
 
    | Customer | Email | Password |
@@ -131,7 +151,8 @@ Tested with GCC 16.2, CMake 4.4 and Qt 6.11.2. In VS Code, set `CMAKE_PREFIX_PAT
    | Humayun Aslam | `humayun.aslam@example.com` | `Humayun123` |
 
    The full list of all 50 is in [`docs/CUSTOMER_ACCOUNTS.md`](docs/CUSTOMER_ACCOUNTS.md)
-   (also as [`docs/customer_accounts.csv`](docs/customer_accounts.csv) for Excel).
+   (also as [`docs/customer_accounts.csv`](docs/customer_accounts.csv) for Excel), together
+   with who has a khata and how much they owe.
    Emails use `example.com`, a domain reserved for examples, so they never reach a real person.
 
 > Sample passwords are simple and public. Untick the sample-data box when setting up a real shop.
@@ -156,7 +177,7 @@ Rs 5,000, tax 0% (`tax_rate_bp`, in basis points: `1700` = 17%).
 |---|---|
 | Ctrl+F | Search |
 | F5 | Refresh the current page |
-| Alt+1 ... Alt+5 | Jump to a sidebar page |
+| Alt+1 ... Alt+6 | Jump to a sidebar page |
 
 ---
 
@@ -180,7 +201,8 @@ Or use the **Testing** panel in VS Code (CMake Tools adds the tests there).
 | `tst_catalog` | Permissions, validation, search/filters/paging, hidden products, image import |
 | `tst_cart_checkout` | Cart rules, checkout totals, price snapshots, duplicate submission, **rollback on failure** |
 | `tst_orders_inventory` | Cancellation + restock, status flow, privacy between customers, stock adjustments, dashboard maths, sample data (all 50 accounts sign in), accounts file matches the app |
-| `tst_gui` | Real windows, offscreen: first-run setup, sign-in, add to cart, checkout, admin pages, dark theme |
+| `tst_khata` | Credit limits, khata checkout, over-limit refusal, cancel reversal, advances, payments, adjustments, permissions, immutable ledger, upgrading a v1 database, sample data |
+| `tst_gui` | Real windows, offscreen: first-run setup, sign-in, add to cart, checkout (COD and khata), my khata, admin khata payment, admin pages, dark theme |
 
 Set `SHOPHUB_SCREENSHOT_DIR=C:\some\folder` before running `tst_gui` to save a screenshot of every screen.
 
@@ -204,7 +226,7 @@ ShopHub/
 │   │   ├── database/         connection, transactions, migrations
 │   │   ├── repositories/     the ONLY place with SQL
 │   │   ├── security/         password hashing
-│   │   └── services/         auth, catalog, cart, pricing, checkout, orders, inventory, dashboard
+│   │   └── services/         auth, catalog, cart, pricing, checkout, orders, inventory, khata, dashboard
 │   └── app/                  Qt Widgets GUI (library: shophub_ui) + main.cpp
 │       └── ui/               theme, main window, pages, dialogs, widgets, table models
 └── tests/                    Qt Test suites
@@ -214,7 +236,14 @@ ShopHub/
 
 ## Roadmap
 
-v1 deliberately leaves these for later:
+**v2 - Pakistan Retail Edition**
+
+1. ~~Khata (credit book)~~ - done
+2. Wholesale prices (lower price for bulk quantities)
+3. Qist (installment plans, built on the khata)
+4. Tax invoices with a QR code
+
+Later:
 
 - Suppliers and purchase orders
 - Coupons and promotions

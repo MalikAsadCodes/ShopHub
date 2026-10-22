@@ -13,6 +13,11 @@ struct Migration
     int version = 0;
     QString name;
     QStringList statements;
+    // SQLite cannot change a table's CHECK constraints in place, so such a
+    // migration rebuilds the table. That needs foreign keys switched off
+    // (they cannot be toggled inside a transaction); the Migrator does this
+    // around the migration and then runs PRAGMA foreign_key_check.
+    bool rebuildsTables = false;
 };
 
 // Applies versioned schema migrations. Each migration runs in its own

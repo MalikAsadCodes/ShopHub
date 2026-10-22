@@ -5,6 +5,7 @@
 #include "ui/dialogs/ShopDialogs.h"
 #include "ui/pages/AdminPages.h"
 #include "ui/pages/CustomerPages.h"
+#include "ui/pages/KhataPages.h"
 #include "ui/widgets/Widgets.h"
 
 #include <QButtonGroup>
@@ -45,6 +46,7 @@ MainWindow::MainWindow(AppContext &app, const Session &session, QWidget *parent)
     if (session.isAdmin()) {
         addPage(QStringLiteral("dashboard"), QStringLiteral("Dashboard"), new DashboardPage(m_ui));
         addPage(QStringLiteral("admin-orders"), QStringLiteral("Orders"), new AdminOrdersPage(m_ui));
+        addPage(QStringLiteral("khata"), QStringLiteral("Khata"), new KhataPage(m_ui));
         addPage(QStringLiteral("products"), QStringLiteral("Products"), new AdminProductsPage(m_ui));
         addPage(QStringLiteral("inventory"), QStringLiteral("Inventory"), new InventoryPage(m_ui));
         auto *section = makeLabel(QStringLiteral("STOREFRONT"));
@@ -59,6 +61,7 @@ MainWindow::MainWindow(AppContext &app, const Session &session, QWidget *parent)
         addPage(QStringLiteral("shop"), QStringLiteral("Shop"), m_shop);
         addPage(QStringLiteral("cart"), QStringLiteral("Cart"), new CartPage(m_ui));
         addPage(QStringLiteral("orders"), QStringLiteral("My orders"), new MyOrdersPage(m_ui));
+        addPage(QStringLiteral("khata"), QStringLiteral("My khata"), new MyKhataPage(m_ui));
     }
 
     // Events from pages and dialogs
@@ -73,6 +76,7 @@ MainWindow::MainWindow(AppContext &app, const Session &session, QWidget *parent)
         refreshCurrent();
     });
     connect(m_events.get(), &AppEvents::catalogChanged, this, &MainWindow::refreshCurrent);
+    connect(m_events.get(), &AppEvents::khataChanged, this, &MainWindow::refreshCurrent);
     connect(m_events.get(), &AppEvents::openProduct, this, &MainWindow::openProduct);
     connect(m_events.get(), &AppEvents::navigate, this, [this](const QString &key) { navigate(key); });
     connect(m_events.get(), &AppEvents::openShop, this, [this](qint64 categoryId, const QString &text) {

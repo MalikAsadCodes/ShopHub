@@ -186,8 +186,9 @@ QVariant OrderTableModel::data(const QModelIndex &index, int role) const
         case Items: return o->itemCount;
         case Total: return sort ? QVariant(o->total.paisa()) : QVariant(o->total.toString());
         case Payment:
-            return QStringLiteral("COD - %1").arg(o->paymentStatus == QLatin1String("paid") ? QStringLiteral("Paid")
-                                                                                          : QStringLiteral("Unpaid"));
+            if (o->paymentMethod == payment::kKhata)
+                return o->status == OrderStatus::Cancelled ? QStringLiteral("Khata - reversed") : QStringLiteral("Khata");
+            return QStringLiteral("COD - %1").arg(payment::statusDisplay(o->paymentStatus));
         case State: return orderstatus::displayName(o->status);
         }
     }
@@ -198,8 +199,10 @@ QVariant OrderTableModel::data(const QModelIndex &index, int role) const
     }
     if (role == Qt::ForegroundRole && col == State)
         return Theme::statusColor(o->status);
-    if (role == Qt::ForegroundRole && col == Payment && o->paymentStatus == QLatin1String("paid"))
+    if (role == Qt::ForegroundRole && col == Payment && o->paymentStatus == payment::kPaid)
         return Theme::palette().success;
+    if (role == Qt::ForegroundRole && col == Payment && o->paymentMethod == payment::kKhata)
+        return o->status == OrderStatus::Cancelled ? Theme::palette().muted : Theme::palette().accent;
     if (role == Qt::FontRole && (col == State || col == Number)) {
         QFont f;
         f.setBold(true);
@@ -258,6 +261,154 @@ QVariant MovementTableModel::data(const QModelIndex &index, int role) const
     if (role == Qt::ForegroundRole && index.column() == 2)
         return m.change > 0 ? Theme::palette().success : Theme::palette().danger;
     if (role == Qt::TextAlignmentRole && (index.column() == 2 || index.column() == 3))
+        return int(Qt::AlignRight | Qt::AlignVCenter);
+    return QVariant();
+}
+
+// ============================================================== Khata accounts
+namespace {
+enum KhataAccountColumn { KCustomer, KEmail, KLimit, KBalance, KAvailable, KLast, KAccountColumns };
+}
+
+KhataAccountTableModel::KhataAccountTableModel(QObject *parent)
+    : QAbstractTableModel(parent)
+{
+}
+
+void KhataAccountTableModel::setAccounts(QVector<KhataAccount> accounts)
+{
+    beginResetModel();
+    m_rows = std::move(accounts);
+    endResetModel();
+}
+
+const KhataAccount *KhataAccountTableModel::accountAt(int row) const
+{
+    return row >= 0 && row < m_rows.size() ? &m_rows[row] : nullptr;
+}
+
+int KhataAccountTableModel::rowCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : m_rows.size();
+}
+
+int KhataAccountTableModel::columnCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : KAccountColumns;
+}
+
+QVariant KhataAccountTableModel::headerData(int section, Qt::Orientation orientation, int role) const
+{
+    if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
+        return QVariant();
+    static const char *names[] = {"Customer", "Email", "Credit limit", "Owes", "Available", "Last activity"};
+    return section >= 0 && section < KAccountColumns ? QString::fromLatin1(names[section]) : QVariant();
+}
+
+QVariant KhataAccountTableModel::data(const QModelIndex &index, int role) const
+{
+    const KhataAccount *a = accountAt(index.row());
+    if (!a)
+        return QVariant();
+    const int col = index.column();
+    if (role == kIdRole)
+        return a->userId;
+    if (role == Qt::DisplayRole || role == kSortRole) {
+        const bool sort = role == kSortRole;
+        auto money = [sort](Money m) { return sort ? QVariant(m.paisa()) : QVariant(m.toString()); };
+        switch (col) {
+        case KCustomer: return a->customerName;
+        case KEmail: return a->email;
+        case KLimit:
+            if (!sort && a->creditLimit.isZero())
+                return QStringLiteral("Not open");
+            return money(a->creditLimit);
+        case KBalance:
+            if (!sort && a->balance.isNegative())
+                return QStringLiteral("Advance %1").arg((Money() - a->balance).toString());
+            return money(a->balance);
+        case KAvailable: return money(a->available());
+        case KLast:
+            if (sort)
+                return QVariant(a->lastActivity);
+            return a->lastActivity.isValid() ? formatDate(a->lastActivity) : QStringLiteral("-");
+        }
+    }
+    if (role == Qt::TextAlignmentRole) {
+        if (col == KLimit || col == KBalance || col == KAvailable)
+            return int(Qt::AlignRight | Qt::AlignVCenter);
+        return int(Qt::AlignLeft | Qt::AlignVCenter);
+    }
+    if (role == Qt::ForegroundRole && col == KBalance) {
+        if (a->overLimit())
+            return Theme::palette().danger;
+        if (a->balance > Money())
+            return Theme::palette().warning;
+        if (a->balance.isNegative())
+            return Theme::palette().success;
+    }
+    if (role == Qt::ForegroundRole && col == KLimit && a->creditLimit.isZero())
+        return Theme::palette().muted;
+    if (role == Qt::FontRole && col == KBalance && a->balance > Money()) {
+        QFont f;
+        f.setBold(true);
+        return f;
+    }
+    return QVariant();
+}
+
+// ============================================================== Khata ledger
+KhataEntryTableModel::KhataEntryTableModel(bool showAuthor, QObject *parent)
+    : QAbstractTableModel(parent), m_showAuthor(showAuthor)
+{
+}
+
+void KhataEntryTableModel::setEntries(QVector<KhataEntry> entries)
+{
+    beginResetModel();
+    m_rows = std::move(entries);
+    endResetModel();
+}
+
+int KhataEntryTableModel::rowCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : m_rows.size();
+}
+
+int KhataEntryTableModel::columnCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : (m_showAuthor ? 7 : 6);
+}
+
+QVariant KhataEntryTableModel::headerData(int section, Qt::Orientation orientation, int role) const
+{
+    if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
+        return QVariant();
+    static const char *names[] = {"When", "Entry", "Order", "Note", "Amount", "Balance", "By"};
+    return section >= 0 && section < columnCount() ? QString::fromLatin1(names[section]) : QVariant();
+}
+
+QVariant KhataEntryTableModel::data(const QModelIndex &index, int role) const
+{
+    if (index.row() < 0 || index.row() >= m_rows.size())
+        return QVariant();
+    const KhataEntry &e = m_rows[index.row()];
+    const int col = index.column();
+    if (role == Qt::DisplayRole) {
+        switch (col) {
+        case 0: return formatDateTime(e.createdAt);
+        case 1: return khataKindDisplay(e.kind);
+        case 2: return e.orderNumber.isEmpty() ? QStringLiteral("-") : e.orderNumber;
+        case 3: return e.kind == KhataKind::Charge || e.kind == KhataKind::Reversal ? QString() : e.note;
+        case 4: return e.amount.isNegative() ? e.amount.toString() : QStringLiteral("+") + e.amount.toString();
+        case 5: return e.balanceAfter.toString();
+        case 6: return e.createdBy;
+        }
+    }
+    // Red = the customer owes more, green = they owe less.
+    if (role == Qt::ForegroundRole && col == 4)
+        return e.amount.isNegative() ? Theme::palette().success : Theme::palette().danger;
+    if (role == Qt::TextAlignmentRole && (col == 4 || col == 5))
         return int(Qt::AlignRight | Qt::AlignVCenter);
     return QVariant();
 }

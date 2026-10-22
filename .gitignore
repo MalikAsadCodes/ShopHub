@@ -8,4 +8,6 @@ CMakeUserPresets.json
 *.user
 .qtcreator/
 .vs/
+
+# Local notes for Claude Code (kept on this computer only)
 CLAUDE.md

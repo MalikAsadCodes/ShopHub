@@ -35,9 +35,24 @@ bool isUniqueViolation(const QSqlQuery &query)
     return query.lastError().databaseText().contains(QLatin1String("UNIQUE constraint failed"));
 }
 
+namespace {
+QString g_fixedNow; // empty = use the real clock
+}
+
 QString nowUtc()
 {
-    return toDb(QDateTime::currentDateTimeUtc());
+    return g_fixedNow.isEmpty() ? toDb(QDateTime::currentDateTimeUtc()) : g_fixedNow;
+}
+
+ScopedFixedClock::ScopedFixedClock(const QDateTime &utc)
+    : m_previous(g_fixedNow)
+{
+    g_fixedNow = toDb(utc);
+}
+
+ScopedFixedClock::~ScopedFixedClock()
+{
+    g_fixedNow = m_previous;
 }
 
 QString toDb(const QDateTime &dt)

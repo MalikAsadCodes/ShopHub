@@ -23,6 +23,7 @@ add_library(shophub_core STATIC
     repositories/CartRepository.h       repositories/CartRepository.cpp
     repositories/OrderRepository.h      repositories/OrderRepository.cpp
     repositories/MiscRepositories.h     repositories/MiscRepositories.cpp
+    repositories/KhataRepository.h      repositories/KhataRepository.cpp
 
     security/PasswordHasher.h    security/PasswordHasher.cpp
 
@@ -35,6 +36,7 @@ add_library(shophub_core STATIC
     services/CheckoutService.h   services/CheckoutService.cpp
     services/OrderService.h      services/OrderService.cpp
     services/InventoryService.h  services/InventoryService.cpp
+    services/KhataService.h      services/KhataService.cpp
     services/DashboardService.h  services/DashboardService.cpp
     services/AppContext.h        services/AppContext.cpp
     services/DemoSeeder.h        services/DemoSeeder.cpp

@@ -40,6 +40,12 @@ Result<DashboardStats> DashboardService::stats(const Session &session) const
         return customers.status();
     s.customerCount = customers.value();
 
+    auto khata = m_repos.khata.outstanding();
+    if (!khata)
+        return khata.status();
+    s.khataOutstanding = khata.value().first;
+    s.khataDebtors = khata.value().second;
+
     auto top = m_repos.orders.topProducts(5);
     if (!top)
         return top.status();

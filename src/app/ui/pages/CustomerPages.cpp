@@ -551,7 +551,7 @@ void CartPage::refresh()
         emit m_ui.events->cartChanged();
     });
     m_summary->addWidget(clear, 0, Qt::AlignHCenter);
-    m_summary->addWidget(makeLabel(QStringLiteral("Payment: Cash on Delivery"), "small"), 0, Qt::AlignHCenter);
+    m_summary->addWidget(makeLabel(QStringLiteral("Pay by Cash on Delivery or Khata"), "small"), 0, Qt::AlignHCenter);
 }
 
 void CartPage::openCheckout()

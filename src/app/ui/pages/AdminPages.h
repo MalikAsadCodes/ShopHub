@@ -33,7 +33,7 @@ public:
 private:
     StatCard *m_sales = nullptr;
     StatCard *m_orders = nullptr;
-    StatCard *m_aov = nullptr;
+    StatCard *m_khata = nullptr;
     StatCard *m_open = nullptr;
     StatCard *m_lowStock = nullptr;
     StatCard *m_customers = nullptr;

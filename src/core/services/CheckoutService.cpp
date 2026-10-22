@@ -64,8 +64,9 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
         return st;
     if (req.checkoutToken.trimmed().isEmpty())
         return Result<Order>::fail(QStringLiteral("Checkout session expired. Please open checkout again."));
-    if (req.paymentMethod != QLatin1String("cod"))
-        return Result<Order>::fail(QStringLiteral("Only Cash on Delivery is available right now."));
+    const bool onKhata = req.paymentMethod == payment::kKhata;
+    if (req.paymentMethod != payment::kCashOnDelivery && !onKhata)
+        return Result<Order>::fail(QStringLiteral("Please choose Cash on Delivery or Khata."));
 
     ShippingDetails ship = req.shipping;
     ship.fullName = ship.fullName.trimmed();
@@ -116,7 +117,26 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
     order.tax = price.tax;
     order.total = price.total;
     order.paymentMethod = req.paymentMethod;
-    order.paymentStatus = QStringLiteral("unpaid");
+    order.paymentStatus = onKhata ? payment::kOnAccount : payment::kUnpaid;
+
+    // 3b. Khata: check the credit limit here, inside the transaction, so two
+    //     orders can never both squeeze under the limit.
+    if (onKhata) {
+        auto account = m_repos.khata.account(session.userId());
+        if (!account)
+            return account.status();
+        if (!account.value() || account.value()->creditLimit.isZero())
+            return Result<Order>::fail(QStringLiteral(
+                "Khata is not open for your account. Please choose Cash on Delivery or ask the shop to give you a credit limit."));
+        const KhataAccount &k = *account.value();
+        if (k.balance + price.total > k.creditLimit)
+            return Result<Order>::fail(
+                QStringLiteral("This order (%1) is more than your available khata credit (%2). "
+                               "Your limit is %3 and you owe %4. Please choose Cash on Delivery, "
+                               "or pay some of your khata first.")
+                    .arg(price.total.toString(), k.available().toString(), k.creditLimit.toString(),
+                         k.balance.toString()));
+    }
     order.shipName = ship.fullName;
     order.shipPhone = ship.phone;
     order.shipLine1 = ship.line1;
@@ -160,9 +180,19 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
     if (auto st = injectFault(QStringLiteral("after_stock_update")); !st)
         return st;
 
+    // 5b. Khata: the order goes into the ledger in the same transaction.
+    if (onKhata) {
+        auto after = m_repos.khata.append(session.userId(), KhataKind::Charge, price.total, orderId.value(),
+                                          order.orderNumber, session.userId());
+        if (!after)
+            return after.status();
+        if (auto st = injectFault(QStringLiteral("after_khata_charge")); !st)
+            return st;
+    }
+
     // 6. History, cart, address, audit.
     if (auto st = m_repos.orders.addHistory(orderId.value(), std::nullopt, OrderStatus::Pending, session.userId(),
-                                            QStringLiteral("Order placed (Cash on Delivery)"));
+                                            QStringLiteral("Order placed (%1)").arg(payment::methodDisplay(req.paymentMethod)));
         !st)
         return st;
     if (auto st = m_repos.carts.clear(session.userId()); !st)

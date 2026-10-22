@@ -89,11 +89,11 @@ DashboardPage::DashboardPage(UiContext &ui, QWidget *parent)
     stats->setVerticalSpacing(14);
     m_sales = new StatCard(QStringLiteral("Gross sales"));
     m_orders = new StatCard(QStringLiteral("Orders"));
-    m_aov = new StatCard(QStringLiteral("Average order value"));
+    m_khata = new StatCard(QStringLiteral("Khata outstanding"));
     m_open = new StatCard(QStringLiteral("Orders to fulfil"));
     m_lowStock = new StatCard(QStringLiteral("Low-stock products"));
     m_customers = new StatCard(QStringLiteral("Customers"));
-    const QList<StatCard *> cards = {m_sales, m_orders, m_aov, m_open, m_lowStock, m_customers};
+    const QList<StatCard *> cards = {m_sales, m_orders, m_khata, m_open, m_lowStock, m_customers};
     for (int i = 0; i < cards.size(); ++i)
         stats->addWidget(cards[i], i / 3, i % 3);
     v->addLayout(stats);
@@ -176,8 +176,11 @@ void DashboardPage::refresh()
     }
     const DashboardStats &s = result.value();
     m_sales->setValue(s.grossSales.toString(), QStringLiteral("All time"));
-    m_orders->setValue(QString::number(s.orderCount), QStringLiteral("Placed, not cancelled"));
-    m_aov->setValue(s.averageOrderValue.toString(), QStringLiteral("Per order"));
+    m_orders->setValue(QString::number(s.orderCount),
+                       QStringLiteral("Not cancelled  ·  average %1").arg(s.averageOrderValue.toString()));
+    m_khata->setValue(s.khataOutstanding.toString(),
+                      s.khataDebtors > 0 ? QStringLiteral("Owed by %1 customer(s) - see Khata").arg(s.khataDebtors)
+                                         : QStringLiteral("Nobody owes the shop"));
     m_open->setValue(QString::number(s.pendingOrders),
                      s.pendingOrders > 0 ? QStringLiteral("Pending, confirmed or processing") : QStringLiteral("All caught up"),
                      s.pendingOrders > 0 ? QStringLiteral("small") : QStringLiteral("small"));
