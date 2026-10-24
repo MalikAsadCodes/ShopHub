@@ -34,8 +34,17 @@ ProductCard::ProductCard(const Product &product, const QString &imagePath, bool 
     body->setContentsMargins(13, 10, 13, 0);
     body->setSpacing(4);
 
-    auto *category = makeLabel(product.categoryName.toUpper(), "small");
-    body->addWidget(category);
+    // Category on the left; a wholesale badge on the same line keeps every card the same height.
+    auto *topRow = new QHBoxLayout();
+    topRow->setContentsMargins(0, 0, 0, 0);
+    topRow->addWidget(makeLabel(product.categoryName.toUpper(), "small"));
+    topRow->addStretch();
+    if (product.wholesaleFrom > 0) {
+        auto *wholesale = makeBadge(QStringLiteral("Wholesale %1+").arg(product.wholesaleFrom), QStringLiteral("accent"));
+        wholesale->setToolTip(QStringLiteral("Lower price when you buy %1 or more").arg(product.wholesaleFrom));
+        topRow->addWidget(wholesale);
+    }
+    body->addLayout(topRow);
 
     auto *name = makeLabel(QString(), "h3");
     name->setWordWrap(true);

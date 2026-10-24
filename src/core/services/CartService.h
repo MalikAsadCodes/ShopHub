@@ -26,6 +26,11 @@ public:
     // Human-readable problems that would block checkout (inactive or out-of-stock lines).
     static QStringList problems(const QVector<CartItem> &items);
 
+    // A user's cart with wholesale prices applied. The cart screen and checkout
+    // both use this, so the customer always pays the price they were shown.
+    // No session check: callers check the session first.
+    static Result<QVector<CartItem>> pricedCart(const Repositories &repos, qint64 userId);
+
 private:
     Repositories &m_repos;
     const PricingService &m_pricing;

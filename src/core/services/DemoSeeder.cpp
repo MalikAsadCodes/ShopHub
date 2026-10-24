@@ -84,6 +84,25 @@ const DemoProduct kProducts[] = {
      "Long-lasting eau de parfum with warm oud and amber notes."},
 };
 
+// Wholesale (quantity) prices on items shops and clubs buy in bulk. Every tier
+// starts above the quantities in the regular sample orders below, so only the
+// three bulk orders at the end of sampleOrders() use them, and the khata
+// figures in docs/CUSTOMER_ACCOUNTS.md stay the same.
+struct DemoTier
+{
+    const char *sku;
+    int minQuantity;
+    int discountBp;
+};
+const DemoTier kTiers[] = {
+    {"BEAU-6001", 6, 500},  {"BEAU-6001", 12, 1000},                         // face wash: salons, hostels
+    {"BEAU-6002", 6, 500},  {"BEAU-6002", 12, 800},                          // hair oil
+    {"BOOK-4002", 10, 1000},                                                  // book clubs, schools
+    {"SPRT-5002", 5, 500},                                                    // yoga mats for a class
+    {"SPRT-5004", 6, 500},  {"SPRT-5004", 12, 1000}, {"SPRT-5004", 24, 1500}, // Sialkot footballs for clubs
+    {"ELEC-1005", 10, 800},                                                   // chargers for offices
+};
+
 // Sample customers: first name, last name, phone, address, city.
 // Email = firstname.lastname@example.com, password = first name + "123".
 // Keep docs/CUSTOMER_ACCOUNTS.md and docs/customer_accounts.csv in step with this list
@@ -310,6 +329,10 @@ const QVector<DemoOrder> &sampleOrders()
         {4, {{"BEAU-6002", 1}}, OrderStatus::Pending, 0},
         {2, {{"FASH-2003", 1}, {"SPRT-5004", 1}}, OrderStatus::Pending, 0},
         {0, {{"HOME-3002", 1}}, OrderStatus::Pending, 0},
+        // Bulk orders at wholesale prices (Cash on Delivery):
+        {40, {{"SPRT-5004", 12}}, OrderStatus::Confirmed, 0},                     // a Sialkot football club
+        {31, {{"BEAU-6002", 6}, {"BEAU-6001", 12}}, OrderStatus::Processing, 0}, // a Karachi salon
+        {23, {{"BOOK-4002", 10}}, OrderStatus::Pending, 0},                       // a school book club
     };
     return orders;
 }
@@ -340,6 +363,14 @@ int DemoSeeder::sampleOrderCount()
 int DemoSeeder::sampleKhataCustomerCount()
 {
     return int(std::size(kKhataLimits));
+}
+
+int DemoSeeder::sampleWholesaleProductCount()
+{
+    QSet<QString> skus;
+    for (const DemoTier &t : kTiers)
+        skus.insert(QString::fromLatin1(t.sku));
+    return int(skus.size());
 }
 
 bool DemoSeeder::isLoaded(AppContext &ctx)
@@ -397,6 +428,21 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
         if (!id)
             return id.status();
         productIds.insert(in.sku, id.value());
+    }
+
+    // Wholesale prices, saved through the catalog service like an admin would.
+    {
+        QHash<QString, QVector<PriceTier>> tiersBySku;
+        for (const DemoTier &t : kTiers) {
+            PriceTier tier;
+            tier.minQuantity = t.minQuantity;
+            tier.discountBp = t.discountBp;
+            tiersBySku[QString::fromLatin1(t.sku)].push_back(tier);
+        }
+        for (auto it = tiersBySku.cbegin(); it != tiersBySku.cend(); ++it) {
+            if (auto st = ctx.catalog().setPriceTiers(admin, productIds.value(it.key()), it.value()); !st)
+                return st;
+        }
     }
 
     // Sample customers (fast hashing; upgraded to full strength on first sign-in)

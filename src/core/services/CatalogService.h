@@ -28,6 +28,17 @@ public:
     Status setProductActive(const Session &session, qint64 productId, bool active);
     Result<QString> importImage(const Session &session, const QString &sourcePath);
 
+    // ---- wholesale (quantity) prices, see docs/WHOLESALE.md
+    // Anyone signed in may read the tiers of a product they can see.
+    Result<QVector<PriceTier>> priceTiers(const Session &session, qint64 productId) const;
+    // Admin only. Replaces all tiers of the product (an empty list removes them).
+    // The list is checked with pricetier::validate and saved with an audit entry.
+    Status setPriceTiers(const Session &session, qint64 productId, QVector<PriceTier> tiers);
+    // Admin hint, not an error: one message per tier whose unit price falls
+    // below the product's cost price. Empty when there is no cost price.
+    static QStringList belowCostWarnings(Money price, const std::optional<Money> &cost,
+                                         const QVector<PriceTier> &tiers);
+
 private:
     Status validate(ProductInput &input, qint64 excludeProductId) const;
     static Product forViewer(const Session &session, Product p);

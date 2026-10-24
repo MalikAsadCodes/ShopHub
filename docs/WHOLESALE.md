@@ -2,7 +2,7 @@
 
 Pakistani shops have always given a better rate to customers who buy by the dozen or the
 carton. This milestone lets the shop set **quantity prices** on any product, and checkout
-applies them automatically.
+applies them automatically. **Status: done.**
 
 ## Decisions
 
@@ -36,6 +36,9 @@ Buying 12 costs 12 × Rs 1,187.50 = **Rs 14,250.00** instead of Rs 15,000.00.
 - A tier starts at **2 to 99 units** (one cart line holds at most 99).
 - A discount is **more than 0% and at most 90%**.
 - No two tiers start at the same quantity, and buying more must never cost more per unit.
+- These rules are checked twice: by `pricetier::validate` (which gives the admin a clear
+  message) and by the database itself (CHECK constraints and triggers, migrations 3 and 4).
+  A test runs the same lists through both so the two copies can never drift apart.
 - **The order keeps the price that was paid.** Changing or removing a tier later never
   changes an old order, just like other order lines today.
 - The final price is worked out by the services inside the checkout transaction, never by
@@ -46,14 +49,17 @@ Buying 12 costs 12 × Rs 1,187.50 = **Rs 14,250.00** instead of Rs 15,000.00.
 | Step | Status |
 |---|---|
 | Tier type and price calculation (`src/core/domain/PriceTier.h`) | **Done** |
-| Database: migration 3 adds `product_price_tiers` (product, starting quantity, discount) | To do |
-| Repository and catalog service: load and save a product's tiers (admin only) | To do |
-| Pricing, cart and checkout use the tier price; the order line stores it | To do |
-| Admin: tier table on the product edit screen, with the cost-price warning | To do |
-| Customer: tier table on the product page, "add 3 more for Rs 1,187.50 each" in the cart | To do |
-| Sample data: tiers on some products, a few sample orders that use them | To do |
-| Tests: rounding, tier boundaries, several lines, price snapshots, permissions, GUI | To do |
-| README, `DATABASE.md` and `ARCHITECTURE.md` updated | To do |
+| Database: migration 3 adds `product_price_tiers` (product, starting quantity, discount) | **Done** |
+| Repository: load and save a product's tiers (`ProductRepository::tiersFor`, `replaceTiers`) | **Done** |
+| Database: migration 4 adds triggers for "at most 5 tiers" and "more units never cost more" | **Done** |
+| Catalog service: `priceTiers`, `setPriceTiers` (admin only, validated, audited) and `belowCostWarnings` | **Done** |
+| Pricing, cart and checkout use the tier price; the order line stores it (`CartService::pricedCart`, `PricingService::applyTiers`) | **Done** |
+| Admin: **Quantity prices...** editor on the Products page, live price each, cost-price warning, "Qty prices" column | **Done** |
+| Customer: "Wholesale 12+" badge, *Buy more, pay less* table on the product page, "Buy 3 more to pay Rs 1,187.50 each" with an **Add** button in the cart, savings in cart and checkout | **Done** |
+| Sample data: tiers on 6 products, 3 bulk orders that use them (khata totals unchanged) | **Done** |
+| Tests: rounding, tier boundaries, several lines, price snapshots, permissions | **Done** |
+| Tests: GUI journey from the admin editor to checkout | **Done** |
+| README, `DATABASE.md` and `ARCHITECTURE.md` updated | **Done** |
 
 ## Later (not in this milestone)
 

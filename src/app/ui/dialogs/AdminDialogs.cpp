@@ -6,6 +6,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -16,6 +17,8 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace shophub::ui {
 
@@ -343,6 +346,185 @@ void CategoriesDialog::reload()
         if (c.id == keep)
             m_list->setCurrentItem(item);
     }
+}
+
+// ====================================================================== Quantity prices
+PriceTiersDialog::PriceTiersDialog(UiContext &ui, const Product &product, QWidget *parent)
+    : QDialog(parent), m_ui(ui), m_product(product)
+{
+    setWindowTitle(QStringLiteral("Quantity prices"));
+    auto existing = ui.app.catalog().priceTiers(ui.session, product.id);
+    if (!existing) {
+        showError(parent, existing.error());
+        return;
+    }
+    m_loaded = true;
+    setMinimumWidth(580);
+
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(24, 20, 24, 20);
+    root->setSpacing(12);
+    root->addWidget(makeLabel(QStringLiteral("Quantity prices"), "h1"));
+
+    QString facts = QStringLiteral("%1  ·  normal price %2").arg(product.name, product.price.toString());
+    if (product.cost)
+        facts += QStringLiteral("  ·  cost %1").arg(product.cost->toString());
+    auto *about = makeLabel(facts, "muted");
+    about->setWordWrap(true);
+    root->addWidget(about);
+
+    auto *hint = makeLabel(QStringLiteral("Give a lower price to customers who buy more of this product, for example "
+                                          "12 or more at 5% off. The highest quantity a customer reaches applies, and "
+                                          "a bigger quantity must get the same or a bigger discount. Leave the quantity "
+                                          "at \"-\" to skip a row."),
+                           "hint");
+    hint->setWordWrap(true);
+    root->addWidget(hint);
+
+    auto *grid = new QGridLayout();
+    grid->setHorizontalSpacing(14);
+    grid->setVerticalSpacing(8);
+    grid->addWidget(makeLabel(QStringLiteral("From quantity"), "small"), 0, 0);
+    grid->addWidget(makeLabel(QStringLiteral("Discount (%)"), "small"), 0, 1);
+    grid->addWidget(makeLabel(QStringLiteral("Price each"), "small"), 0, 2);
+    for (int i = 0; i < kRows; ++i) {
+        Row r;
+        r.from = new QSpinBox();
+        r.from->setRange(0, pricetier::kMaxQuantity);
+        r.from->setSpecialValueText(QStringLiteral("-")); // 0 = row not used
+        r.from->setMinimumHeight(34);
+        r.from->setMinimumWidth(110);
+        r.from->setAccessibleName(QStringLiteral("Tier %1: from quantity").arg(i + 1));
+        r.discount = lineEdit(QStringLiteral("e.g. 5"));
+        r.discount->setAccessibleName(QStringLiteral("Tier %1: discount percent").arg(i + 1));
+        r.price = makeLabel(QString(), "h3");
+        r.price->setMinimumWidth(170);
+        grid->addWidget(r.from, i + 1, 0);
+        grid->addWidget(r.discount, i + 1, 1);
+        grid->addWidget(r.price, i + 1, 2);
+        m_rows.push_back(r);
+    }
+    grid->setColumnStretch(2, 1);
+    root->addLayout(grid);
+
+    m_warnings = new QLabel();
+    m_warnings->setWordWrap(true);
+    m_warnings->hide();
+    root->addWidget(m_warnings);
+
+    m_error = makeLabel(QString(), "error");
+    m_error->setWordWrap(true);
+    root->addWidget(m_error);
+
+    auto *buttons = new QHBoxLayout();
+    auto *clearAll = makeButton(QStringLiteral("Remove all"), "ghost");
+    clearAll->setToolTip(QStringLiteral("Empty every row. Save to sell at the normal price only."));
+    connect(clearAll, &QPushButton::clicked, this, [this] {
+        for (int i = 0; i < m_rows.size(); ++i)
+            setRow(i, 0, QString());
+    });
+    buttons->addWidget(clearAll);
+    buttons->addStretch();
+    auto *cancel = makeButton(QStringLiteral("Cancel"), "ghost");
+    auto *saveButton = makeButton(QStringLiteral("Save prices"), "primary");
+    saveButton->setDefault(true);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+    connect(saveButton, &QPushButton::clicked, this, &PriceTiersDialog::save);
+    buttons->addWidget(cancel);
+    buttons->addWidget(saveButton);
+    root->addLayout(buttons);
+
+    const QVector<PriceTier> &saved = existing.value(); // sorted by quantity
+    for (int i = 0; i < saved.size() && i < kRows; ++i)
+        setRow(i, saved.at(i).minQuantity, pricetier::percentText(saved.at(i).discountBp));
+
+    for (const Row &r : std::as_const(m_rows)) {
+        connect(r.from, qOverload<int>(&QSpinBox::valueChanged), this, &PriceTiersDialog::updatePreview);
+        connect(r.discount, &QLineEdit::textChanged, this, &PriceTiersDialog::updatePreview);
+    }
+    updatePreview();
+}
+
+void PriceTiersDialog::setRow(int row, int fromQuantity, const QString &discountPercent)
+{
+    if (row < 0 || row >= m_rows.size())
+        return;
+    m_rows[row].from->setValue(fromQuantity);
+    m_rows[row].discount->setText(discountPercent);
+}
+
+Result<QVector<PriceTier>> PriceTiersDialog::collect() const
+{
+    QVector<PriceTier> tiers;
+    for (int i = 0; i < m_rows.size(); ++i) {
+        const Row &r = m_rows.at(i);
+        const QString text = r.discount->text().trimmed();
+        if (r.from->value() == 0) {
+            if (!text.isEmpty())
+                return Result<QVector<PriceTier>>::fail(
+                    QStringLiteral("Row %1: choose the quantity this price starts at, or clear the discount.").arg(i + 1));
+            continue;
+        }
+        const std::optional<int> bp = pricetier::parsePercent(text);
+        if (!bp)
+            return Result<QVector<PriceTier>>::fail(
+                QStringLiteral("Row %1: enter the discount as a percentage, e.g. 5 or 2.5.").arg(i + 1));
+        PriceTier t;
+        t.minQuantity = r.from->value();
+        t.discountBp = *bp;
+        tiers.push_back(t);
+    }
+    return tiers;
+}
+
+void PriceTiersDialog::updatePreview()
+{
+    // Price each for every complete row, and a warning for prices below cost.
+    // The full rules are checked by the catalog service when saving.
+    QVector<PriceTier> shown;
+    for (const Row &r : std::as_const(m_rows)) {
+        const std::optional<int> bp = pricetier::parsePercent(r.discount->text());
+        if (r.from->value() >= pricetier::kMinQuantity && bp && *bp > 0 && *bp <= pricetier::kMaxDiscountBp) {
+            PriceTier t;
+            t.minQuantity = r.from->value();
+            t.discountBp = *bp;
+            r.price->setText(QStringLiteral("%1 each").arg(pricetier::unitPrice(m_product.price, t).toString()));
+            shown.push_back(t);
+        } else {
+            r.price->clear();
+        }
+    }
+
+    const QStringList warnings = CatalogService::belowCostWarnings(m_product.price, m_product.cost, shown);
+    if (warnings.isEmpty()) {
+        m_warnings->hide();
+    } else {
+        setBadge(m_warnings,
+                 QStringLiteral("Below the cost price. This is allowed, but the shop loses money on:\n%1")
+                     .arg(warnings.join(QLatin1Char('\n'))),
+                 QStringLiteral("warning"));
+        m_warnings->show();
+    }
+    m_error->clear();
+}
+
+void PriceTiersDialog::save()
+{
+    auto tiers = collect();
+    if (!tiers) {
+        m_error->setText(tiers.error());
+        return;
+    }
+    const Status st = m_ui.app.catalog().setPriceTiers(m_ui.session, m_product.id, tiers.value());
+    if (!st) {
+        m_error->setText(st.error());
+        return;
+    }
+    emit m_ui.events->catalogChanged();
+    emit m_ui.events->toast(tiers.value().isEmpty()
+                                ? QStringLiteral("%1 is back to its normal price only").arg(m_product.name)
+                                : QStringLiteral("Quantity prices saved for %1").arg(m_product.name));
+    accept();
 }
 
 // ====================================================================== Stock adjust

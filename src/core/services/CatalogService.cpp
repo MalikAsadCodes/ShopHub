@@ -4,6 +4,8 @@
 #include "database/Transaction.h"
 #include "services/Access.h"
 
+#include <algorithm>
+
 namespace shophub {
 
 namespace {
@@ -210,6 +212,77 @@ Result<QString> CatalogService::importImage(const Session &session, const QStrin
     if (auto st = access::requireAdmin(session); !st)
         return st;
     return m_images.import(sourcePath);
+}
+
+// ---------------------------------------------------------------- wholesale prices
+
+namespace {
+
+// "12+: 5%, 50+: 10%" for the audit log.
+QString describeTiers(const QVector<PriceTier> &tiers)
+{
+    if (tiers.isEmpty())
+        return QStringLiteral("none");
+    QStringList parts;
+    for (const PriceTier &t : tiers)
+        parts << QStringLiteral("%1+: %2%").arg(t.minQuantity).arg(pricetier::percentText(t.discountBp));
+    return parts.join(QStringLiteral(", "));
+}
+
+} // namespace
+
+Result<QVector<PriceTier>> CatalogService::priceTiers(const Session &session, qint64 productId) const
+{
+    // product() checks the session and hides products a customer may not see.
+    if (auto p = product(session, productId); !p)
+        return p.status();
+    return m_repos.products.tiersFor(productId);
+}
+
+Status CatalogService::setPriceTiers(const Session &session, qint64 productId, QVector<PriceTier> tiers)
+{
+    if (auto st = access::requireAdmin(session); !st)
+        return st;
+    auto existing = m_repos.products.findById(productId);
+    if (!existing)
+        return existing.status();
+    if (!existing.value())
+        return Status::fail(QStringLiteral("Product not found."));
+    if (const QString problem = pricetier::validate(tiers); !problem.isEmpty())
+        return Status::fail(problem);
+
+    std::sort(tiers.begin(), tiers.end(),
+              [](const PriceTier &a, const PriceTier &b) { return a.minQuantity < b.minQuantity; });
+
+    Transaction tx(m_repos.connection);
+    if (auto st = tx.begin(); !st)
+        return st;
+    if (auto st = m_repos.products.replaceTiers(productId, tiers); !st)
+        return st;
+    if (auto st = m_repos.audit.log(session.userId(), QStringLiteral("product_tiers_updated"), QStringLiteral("product"),
+                                    productId, existing.value()->sku + QStringLiteral(" ") + describeTiers(tiers));
+        !st)
+        return st;
+    return tx.commit();
+}
+
+QStringList CatalogService::belowCostWarnings(Money price, const std::optional<Money> &cost,
+                                              const QVector<PriceTier> &tiers)
+{
+    QStringList out;
+    if (!cost)
+        return out;
+    QVector<PriceTier> sorted = tiers;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const PriceTier &a, const PriceTier &b) { return a.minQuantity < b.minQuantity; });
+    for (const PriceTier &t : sorted) {
+        const Money unit = pricetier::unitPrice(price, t);
+        if (unit < *cost)
+            out << QStringLiteral("%1 or more: %2 each is below the cost price (%3).")
+                       .arg(t.minQuantity)
+                       .arg(unit.toString(), cost->toString());
+    }
+    return out;
 }
 
 } // namespace shophub

@@ -30,7 +30,8 @@ Result<QVector<CartItem>> CartRepository::items(qint64 userId) const
         i.name = q.value(2).toString();
         i.imageFile = q.value(3).toString();
         i.categoryName = q.value(4).toString();
-        i.unitPrice = Money::fromPaisa(q.value(5).toLongLong());
+        i.basePrice = Money::fromPaisa(q.value(5).toLongLong());
+        i.unitPrice = i.basePrice; // wholesale tiers are applied by the services
         i.quantity = q.value(6).toInt();
         i.availableStock = q.value(7).toInt();
         i.productActive = q.value(8).toInt() == 1;

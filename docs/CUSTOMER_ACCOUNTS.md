@@ -80,3 +80,20 @@ Sign in as one of them and choose **Khata (pay later)** at checkout, or open **M
 | Adeel Sheikh | Rs 50,000 | Rs 14,497 | Paid Rs 10,000 by bank transfer |
 
 The administrator account is never part of the sample data: you create it yourself on first run.
+
+## Wholesale prices in the sample data
+
+Six products have quantity prices (look for the **Wholesale** badge in the shop):
+
+| Product | Quantity prices |
+|---|---|
+| Herbal Face Wash | 6 or more: 5% off · 12 or more: 10% off |
+| Saffron Hair Oil | 6 or more: 5% off · 12 or more: 8% off |
+| Atomic Habits | 10 or more: 10% off |
+| Yoga Mat 6mm | 5 or more: 5% off |
+| Match Football Size 5 | 6 or more: 5% off · 12 or more: 10% off · 24 or more: 15% off |
+| USB-C Fast Charger 65W | 10 or more: 8% off |
+
+Three sample customers placed bulk orders at these prices (Cash on Delivery, so the khata
+figures above do not change): Owais Chaudhry (12 footballs for a Sialkot club), Mehwish Saleem
+(hair oil and face wash for a salon) and Rabia Aziz (10 copies of Atomic Habits for a book club).

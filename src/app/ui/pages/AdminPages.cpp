@@ -273,7 +273,7 @@ AdminProductsPage::AdminProductsPage(UiContext &ui, QWidget *parent)
 
     m_model = new ProductTableModel({ProductTableModel::Sku, ProductTableModel::Name, ProductTableModel::Category,
                                      ProductTableModel::Brand, ProductTableModel::Price, ProductTableModel::Cost,
-                                     ProductTableModel::Stock, ProductTableModel::Status},
+                                     ProductTableModel::Stock, ProductTableModel::Wholesale, ProductTableModel::Status},
                                     this);
     m_proxy = new QSortFilterProxyModel(this);
     m_proxy->setSourceModel(m_model);
@@ -292,9 +292,12 @@ AdminProductsPage::AdminProductsPage(UiContext &ui, QWidget *parent)
     actions->addStretch();
     m_preview = makeButton(QStringLiteral("Preview"));
     m_toggle = makeButton(QStringLiteral("Hide from shop"));
+    m_tiers = makeButton(QStringLiteral("Quantity prices..."));
+    m_tiers->setToolTip(QStringLiteral("Wholesale prices: a lower price when a customer buys more, e.g. 12 or more at 5% off"));
     m_edit = makeButton(QStringLiteral("Edit..."), "primary");
     actions->addWidget(m_preview);
     actions->addWidget(m_toggle);
+    actions->addWidget(m_tiers);
     actions->addWidget(m_edit);
     m_layout->addLayout(actions);
 
@@ -306,6 +309,7 @@ AdminProductsPage::AdminProductsPage(UiContext &ui, QWidget *parent)
     connect(m_table, &QTableView::doubleClicked, this, &AdminProductsPage::editSelected);
     connect(m_edit, &QPushButton::clicked, this, &AdminProductsPage::editSelected);
     connect(m_toggle, &QPushButton::clicked, this, &AdminProductsPage::toggleSelected);
+    connect(m_tiers, &QPushButton::clicked, this, &AdminProductsPage::editTiersOfSelected);
     connect(m_preview, &QPushButton::clicked, this, [this] {
         if (const Product *p = selected())
             emit m_ui.events->openProduct(p->id);
@@ -367,6 +371,7 @@ void AdminProductsPage::updateButtons()
     m_edit->setEnabled(p);
     m_toggle->setEnabled(p);
     m_preview->setEnabled(p);
+    m_tiers->setEnabled(p);
     m_toggle->setText(p && !p->active ? QStringLiteral("Show in shop") : QStringLiteral("Hide from shop"));
 }
 
@@ -378,6 +383,16 @@ void AdminProductsPage::editSelected()
     ProductEditDialog dialog(m_ui, p->id, window());
     if (dialog.isLoaded())
         dialog.exec();
+}
+
+void AdminProductsPage::editTiersOfSelected()
+{
+    const Product *p = selected();
+    if (!p)
+        return;
+    PriceTiersDialog dialog(m_ui, *p, window());
+    if (dialog.isLoaded() && dialog.exec() == QDialog::Accepted)
+        refresh();
 }
 
 void AdminProductsPage::toggleSelected()

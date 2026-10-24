@@ -9,6 +9,7 @@ add_library(shophub_core STATIC
     domain/Types.h               domain/Types.cpp
     domain/OrderStatus.h         domain/OrderStatus.cpp
     domain/Session.h
+    domain/PriceTier.h
 
     database/Database.h          database/Database.cpp
     database/Transaction.h       database/Transaction.cpp

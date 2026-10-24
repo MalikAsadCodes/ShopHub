@@ -170,7 +170,101 @@ private slots:
         QVERIFY(!m_b->ctx->catalog().importImage(m_b->customer, real).isOk());
     }
 
+    // ------------------------------------------------------------------ wholesale prices
+    void onlyAdminCanSetPriceTiers()
+    {
+        auto &catalog = m_b->ctx->catalog();
+        const qint64 id = m_b->addProduct(QStringLiteral("WS-1"), 1250, 100);
+        QVERIFY(!catalog.setPriceTiers(m_b->customer, id, {tier(12, 500)}).isOk());
+        QVERIFY(!catalog.setPriceTiers(Session(), id, {tier(12, 500)}).isOk());
+        QVERIFY(catalog.priceTiers(m_b->admin, id).value().isEmpty());
+
+        QVERIFY(catalog.setPriceTiers(m_b->admin, id, {tier(12, 500)}).isOk());
+        QVERIFY(!catalog.priceTiers(Session(), id).isOk()); // reading needs a signed-in user
+        auto seen = catalog.priceTiers(m_b->customer, id);
+        QVERIFY2(seen.isOk(), qPrintable(seen.error()));
+        QCOMPARE(seen.value().size(), 1);
+        QCOMPARE(seen.value().at(0).discountBp, 500);
+    }
+
+    void priceTiersAreValidated()
+    {
+        auto &catalog = m_b->ctx->catalog();
+        const qint64 id = m_b->addProduct(QStringLiteral("WS-2"), 1250, 100);
+        QVERIFY(catalog.setPriceTiers(m_b->admin, id, {tier(12, 500)}).isOk());
+
+        const Status smaller = catalog.setPriceTiers(m_b->admin, id, {tier(12, 500), tier(50, 400)});
+        QVERIFY(!smaller.isOk());
+        QVERIFY2(smaller.error().contains(QStringLiteral("must not cost more")), qPrintable(smaller.error()));
+        const Status six = catalog.setPriceTiers(m_b->admin, id,
+                                                 {tier(2, 100), tier(3, 200), tier(4, 300), tier(5, 400),
+                                                  tier(6, 500), tier(7, 600)});
+        QVERIFY(!six.isOk());
+        QVERIFY2(six.error().contains(QStringLiteral("at most 5")), qPrintable(six.error()));
+        QVERIFY(!catalog.setPriceTiers(m_b->admin, id, {tier(1, 500)}).isOk());
+        QVERIFY(!catalog.setPriceTiers(m_b->admin, 424242, {tier(12, 500)}).isOk()); // unknown product
+
+        // A refused list leaves the saved tiers as they were.
+        auto kept = catalog.priceTiers(m_b->admin, id);
+        QCOMPARE(kept.value().size(), 1);
+        QCOMPARE(kept.value().at(0).minQuantity, 12);
+    }
+
+    void savingTiersIsAuditedAndSorted()
+    {
+        auto &catalog = m_b->ctx->catalog();
+        const qint64 id = m_b->addProduct(QStringLiteral("WS-3"), 1250, 100);
+        QVERIFY(catalog.setPriceTiers(m_b->admin, id, {tier(50, 1000), tier(12, 250)}).isOk());
+
+        auto saved = catalog.priceTiers(m_b->admin, id);
+        QCOMPARE(saved.value().size(), 2);
+        QCOMPARE(saved.value().at(0).minQuantity, 12);
+        QCOMPARE(saved.value().at(1).minQuantity, 50);
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT details FROM audit_logs WHERE action = 'product_tiers_updated'"))
+                     .toString(),
+                 QStringLiteral("WS-3 12+: 2.50%, 50+: 10%"));
+
+        QVERIFY(catalog.setPriceTiers(m_b->admin, id, {}).isOk()); // remove them all
+        QVERIFY(catalog.priceTiers(m_b->admin, id).value().isEmpty());
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT COUNT(*) FROM audit_logs WHERE action = 'product_tiers_updated'"))
+                     .toInt(),
+                 2);
+    }
+
+    void customerCannotSeeTiersOfHiddenProduct()
+    {
+        auto &catalog = m_b->ctx->catalog();
+        const qint64 id = m_b->addProduct(QStringLiteral("WS-4"), 1250, 100);
+        QVERIFY(catalog.setPriceTiers(m_b->admin, id, {tier(12, 500)}).isOk());
+        QVERIFY(catalog.setProductActive(m_b->admin, id, false).isOk());
+        QVERIFY(!catalog.priceTiers(m_b->customer, id).isOk());
+        QVERIFY(catalog.priceTiers(m_b->admin, id).isOk());
+    }
+
+    void belowCostWarnings()
+    {
+        const Money price = Money::fromRupees(1000);
+        const QVector<PriceTier> tiers = {tier(50, 2000), tier(12, 500)}; // Rs 800 and Rs 950
+        QVERIFY(CatalogService::belowCostWarnings(price, std::nullopt, tiers).isEmpty());
+        QVERIFY(CatalogService::belowCostWarnings(price, Money::fromRupees(700), tiers).isEmpty());
+
+        const QStringList one = CatalogService::belowCostWarnings(price, Money::fromRupees(900), tiers);
+        QCOMPARE(one.size(), 1);
+        QVERIFY2(one.first().startsWith(QStringLiteral("50 or more")), qPrintable(one.first()));
+
+        QCOMPARE(CatalogService::belowCostWarnings(price, Money::fromRupees(990), tiers).size(), 2);
+        QVERIFY(CatalogService::belowCostWarnings(price, Money::fromRupees(800), tiers).isEmpty()); // equal is fine
+    }
+
 private:
+    static PriceTier tier(int minQuantity, int discountBp)
+    {
+        PriceTier t;
+        t.minQuantity = minQuantity;
+        t.discountBp = discountBp;
+        return t;
+    }
+
     std::unique_ptr<test::Backend> m_b;
 };
 

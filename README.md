@@ -5,7 +5,7 @@ Customers browse a catalog, keep a cart, check out with Cash on Delivery or on t
 **khata** (shop credit) and track their orders. Store admins get a dashboard, product and
 category management, inventory with a full stock history, order fulfilment and a khata book.
 
-This is **version 2 - Pakistan Retail Edition** (in progress). Milestone 1, **Khata**, is done.
+This is **version 2 - Pakistan Retail Edition** (in progress). Milestones 1 and 2, **Khata** and **wholesale prices**, are done.
 See [Roadmap](#roadmap) for what comes next.
 
 | Customer home | Admin dashboard |
@@ -35,6 +35,19 @@ More in [`docs/screenshots`](docs/screenshots).
 - Dashboard shows **Khata outstanding** and how many customers owe
 - The ledger can never be edited or deleted, only corrected with a new entry (enforced by the database)
 - Your v1 database is upgraded automatically on first start, keeping all data
+
+**Wholesale prices**, the dozen and carton rates every bazaar shop gives:
+
+- On the Products page, **Quantity prices...** sets up to 5 tiers per product, e.g. *12 or more: 5% off*,
+  *50 or more: 10% off*. It shows the price each as you type and warns when a tier falls below the cost price
+- Products with quantity prices get a **Wholesale 12+** badge in the shop and a *Buy more, pay less* table
+  on the product page
+- The cart applies the right price automatically, shows the saving, and offers **"Buy 1 more to pay
+  Rs 1,187.50 each"** with a one-click button
+- Free delivery and khata limits use the discounted total, and every order keeps the price that was paid,
+  even if the tiers change later
+- The rules (at most 5 tiers, 2-99 units, more than 0% and at most 90% off, buying more never costs more)
+  are checked by the app and enforced by the database. See [`docs/WHOLESALE.md`](docs/WHOLESALE.md)
 
 ## Features (v1)
 
@@ -138,8 +151,8 @@ Tested with GCC 16.2, CMake 4.4 and Qt 6.11.2. In VS Code, set `CMAKE_PREFIX_PAT
 1. ShopHub asks you to **create the administrator account**. Choose your own email and password.
    No default admin password exists.
 2. Leave **"Add sample products, orders and 50 customer accounts"** ticked to get 6 categories,
-   27 products, **50 customer accounts** with Pakistani names and about 70 orders in every state
-   (pending to delivered, plus a few cancelled) spread over the last three weeks. Setup takes a few seconds.
+   27 products (6 with wholesale prices), **50 customer accounts** with Pakistani names and about 75 orders in every state
+   (pending to delivered, plus a few cancelled, and 3 bulk orders at wholesale prices) spread over the last three weeks. Setup takes a few seconds.
 3. Sign out (top-right menu) and sign in as any sample customer to try shopping.
    Eight of them have a khata, including Ayesha Khan below (limit Rs 30,000).
    **Every sample password is the customer's first name + `123`.** For example:
@@ -194,15 +207,15 @@ Or use the **Testing** panel in VS Code (CMake Tools adds the tests there).
 |---|---|
 | `tst_money` | Parsing, formatting, rounding of paisa amounts |
 | `tst_validation` | Emails, passwords, phones, SKUs, LIKE escaping |
-| `tst_pricing` | Delivery threshold, tax rounding, cart problem detection |
+| `tst_pricing` | Delivery threshold, tax rounding, cart problem detection, wholesale tier boundaries, rounding and hints, free delivery on the discounted subtotal |
 | `tst_orderstatus` | Allowed and forbidden status transitions |
-| `tst_database` | Migrations, foreign keys, CHECK constraints, immutable order lines |
+| `tst_database` | Migrations, foreign keys, CHECK constraints, immutable order lines, wholesale price tiers (rules, triggers, save and load, rollback with and without a transaction), `validate` and the database agree, upgrading a v2 database |
 | `tst_auth` | Login, lockout, hashing, duplicate emails, password change, audit log, sample accounts |
-| `tst_catalog` | Permissions, validation, search/filters/paging, hidden products, image import |
-| `tst_cart_checkout` | Cart rules, checkout totals, price snapshots, duplicate submission, **rollback on failure** |
-| `tst_orders_inventory` | Cancellation + restock, status flow, privacy between customers, stock adjustments, dashboard maths, sample data (all 50 accounts sign in), accounts file matches the app |
+| `tst_catalog` | Permissions, validation, search/filters/paging, hidden products, image import, wholesale tiers (admin only, validated, audited, below-cost warnings) |
+| `tst_cart_checkout` | Cart rules, checkout totals, price snapshots, duplicate submission, **rollback on failure**, wholesale prices in cart and checkout |
+| `tst_orders_inventory` | Cancellation + restock, status flow, privacy between customers, stock adjustments, dashboard maths, sample data (all 50 accounts sign in, wholesale tiers and bulk orders), accounts file matches the app |
 | `tst_khata` | Credit limits, khata checkout, over-limit refusal, cancel reversal, advances, payments, adjustments, permissions, immutable ledger, upgrading a v1 database, sample data |
-| `tst_gui` | Real windows, offscreen: first-run setup, sign-in, add to cart, checkout (COD and khata), my khata, admin khata payment, admin pages, dark theme |
+| `tst_gui` | Real windows, offscreen: first-run setup, sign-in, add to cart, checkout (COD and khata), my khata, admin khata payment, admin pages, dark theme, quantity prices editor, wholesale badge, product price table, cart "add 1 more" and checkout at the tier price |
 
 Set `SHOPHUB_SCREENSHOT_DIR=C:\some\folder` before running `tst_gui` to save a screenshot of every screen.
 
@@ -239,7 +252,7 @@ ShopHub/
 **v2 - Pakistan Retail Edition**
 
 1. ~~Khata (credit book)~~ - done
-2. Wholesale prices (lower price for bulk quantities)
+2. ~~Wholesale prices (lower price for bulk quantities)~~ - done
 3. Qist (installment plans, built on the khata)
 4. Tax invoices with a QR code
 

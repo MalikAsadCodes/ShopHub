@@ -13,7 +13,22 @@ Result<QVector<CartItem>> CartService::items(const Session &session) const
 {
     if (auto st = access::requireCustomer(session); !st)
         return st;
-    return m_repos.carts.items(session.userId());
+    return pricedCart(m_repos, session.userId());
+}
+
+Result<QVector<CartItem>> CartService::pricedCart(const Repositories &repos, qint64 userId)
+{
+    auto items = repos.carts.items(userId);
+    if (!items)
+        return items;
+    QVector<qint64> productIds;
+    for (const CartItem &i : items.value())
+        productIds << i.productId;
+    auto tiers = repos.products.tiersForProducts(productIds);
+    if (!tiers)
+        return tiers.status();
+    PricingService::applyTiers(items.value(), tiers.value());
+    return items;
 }
 
 Result<PriceBreakdown> CartService::summary(const Session &session) const

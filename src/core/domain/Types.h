@@ -2,6 +2,7 @@
 
 #include "common/Money.h"
 #include "domain/OrderStatus.h"
+#include "domain/PriceTier.h"
 
 #include <QDate>
 #include <QDateTime>
@@ -72,6 +73,7 @@ struct Product
     bool categoryActive = true;  // false when its category is switched off
     QString imageFile; // file name inside the app's image store, or empty
     int unitsSold = 0;
+    int wholesaleFrom = 0; // smallest quantity with a wholesale price, 0 = no quantity prices
     QDateTime createdAt;
     QDateTime updatedAt;
 
@@ -125,21 +127,30 @@ struct CartItem
     QString name;
     QString imageFile;
     QString categoryName;
-    Money unitPrice;
+    Money basePrice;   // the product's normal price
+    Money unitPrice;   // the price charged per unit: basePrice, or lower when a wholesale tier applies
     int quantity = 0;
     int availableStock = 0;
     bool productActive = true;
 
+    // Wholesale prices, filled in by the services (PricingService::applyTiers).
+    int discountBp = 0;                  // the tier applied to this line, 0 = normal price
+    std::optional<PriceTier> nextTier;   // the next tier up, for "add 3 more for Rs X each"
+    Money nextTierUnitPrice;             // unit price at nextTier (zero when there is none)
+
     Money lineTotal() const { return unitPrice * quantity; }
+    Money lineSavings() const { return basePrice > unitPrice ? (basePrice - unitPrice) * quantity : Money(); }
+    int unitsToNextTier() const { return nextTier ? nextTier->minQuantity - quantity : 0; }
     bool isAvailable() const { return productActive && quantity <= availableStock; }
 };
 
 struct PriceBreakdown
 {
-    Money subtotal;
+    Money subtotal;    // after wholesale discounts
     Money shipping;
     Money tax;
     Money total;
+    Money savings;     // what wholesale prices saved, already taken off the subtotal
     int itemCount = 0; // sum of quantities
 };
 

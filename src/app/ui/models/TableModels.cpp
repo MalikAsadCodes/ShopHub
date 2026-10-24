@@ -50,6 +50,7 @@ QVariant ProductTableModel::headerData(int section, Qt::Orientation orientation,
     case LowAt: return QStringLiteral("Low at");
     case StockState: return QStringLiteral("Stock status");
     case Status: return QStringLiteral("Status");
+    case Wholesale: return QStringLiteral("Qty prices");
     }
     return QVariant();
 }
@@ -86,6 +87,10 @@ QVariant ProductTableModel::data(const QModelIndex &index, int role) const
             if (!p->categoryActive)
                 return QStringLiteral("Category off");
             return QStringLiteral("Active");
+        case Wholesale:
+            if (sort)
+                return p->wholesaleFrom > 0 ? p->wholesaleFrom : 1000;
+            return p->wholesaleFrom > 0 ? QStringLiteral("from %1").arg(p->wholesaleFrom) : QStringLiteral("-");
         }
     }
 

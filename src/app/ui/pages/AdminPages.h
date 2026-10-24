@@ -56,6 +56,7 @@ private:
     const Product *selected() const;
     void updateButtons();
     void editSelected();
+    void editTiersOfSelected();
     void toggleSelected();
 
     QLineEdit *m_search = nullptr;
@@ -68,6 +69,7 @@ private:
     QPushButton *m_edit = nullptr;
     QPushButton *m_toggle = nullptr;
     QPushButton *m_preview = nullptr;
+    QPushButton *m_tiers = nullptr;
     QTimer *m_debounce = nullptr;
 };
 

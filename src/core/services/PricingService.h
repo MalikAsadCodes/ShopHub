@@ -2,6 +2,8 @@
 
 #include "domain/Types.h"
 
+#include <QHash>
+
 namespace shophub {
 
 struct PricingRules
@@ -24,6 +26,12 @@ public:
 
     PriceBreakdown price(const QVector<CartItem> &items) const;
     Money shippingFor(Money subtotal) const;
+
+    // Sets each line's unit price from its product's wholesale tiers (keyed by
+    // product id): the highest tier the line's quantity reaches applies, and
+    // the next tier up is filled in for hints. Lines of products without tiers
+    // keep their normal price. See docs/WHOLESALE.md.
+    static void applyTiers(QVector<CartItem> &items, const QHash<qint64, QVector<PriceTier>> &tiersByProduct);
 
 private:
     PricingRules m_rules;

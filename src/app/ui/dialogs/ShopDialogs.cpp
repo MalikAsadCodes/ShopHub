@@ -8,6 +8,7 @@
 #include <QCheckBox>
 #include <QCompleter>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -93,6 +94,37 @@ ProductDetailsDialog::ProductDetailsDialog(UiContext &ui, qint64 productId, QWid
                         0, Qt::AlignVCenter);
     priceRow->addStretch();
     info->addLayout(priceRow);
+
+    // Wholesale prices: "Buy more, pay less" with one line per quantity band.
+    if (auto tiers = ui.app.catalog().priceTiers(ui.session, m_product.id); tiers && !tiers.value().isEmpty()) {
+        const QVector<PriceTier> &list = tiers.value();
+        info->addSpacing(6);
+        info->addWidget(makeLabel(QStringLiteral("Buy more, pay less"), "h3"));
+        auto *bands = new QGridLayout();
+        bands->setHorizontalSpacing(18);
+        bands->setVerticalSpacing(4);
+        auto addBand = [&](int row, const QString &quantity, Money unit, int discountBp) {
+            bands->addWidget(makeLabel(quantity, "muted"), row, 0);
+            bands->addWidget(makeLabel(QStringLiteral("%1 each").arg(unit.toString())), row, 1);
+            if (discountBp > 0)
+                bands->addWidget(makeBadge(QStringLiteral("%1% off").arg(pricetier::percentText(discountBp)),
+                                           QStringLiteral("success")),
+                                 row, 2, Qt::AlignLeft);
+        };
+        const int firstFrom = list.first().minQuantity;
+        addBand(0, firstFrom == 2 ? QStringLiteral("1") : QStringLiteral("1 - %1").arg(firstFrom - 1), m_product.price, 0);
+        for (int i = 0; i < list.size(); ++i) {
+            const PriceTier &t = list.at(i);
+            const QString quantity = i + 1 < list.size()
+                                         ? (list.at(i + 1).minQuantity - 1 == t.minQuantity
+                                                ? QString::number(t.minQuantity)
+                                                : QStringLiteral("%1 - %2").arg(t.minQuantity).arg(list.at(i + 1).minQuantity - 1))
+                                         : QStringLiteral("%1 or more").arg(t.minQuantity);
+            addBand(i + 1, quantity, pricetier::unitPrice(m_product.price, t), t.discountBp);
+        }
+        bands->setColumnStretch(3, 1);
+        info->addLayout(bands);
+    }
 
     if (!m_product.description.isEmpty()) {
         auto *desc = makeLabel(m_product.description, "muted");
@@ -237,7 +269,10 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
 
     for (const CartItem &c : lines) {
         auto *row = new QHBoxLayout();
-        auto *name = makeLabel(QStringLiteral("%1 × %2").arg(c.quantity).arg(c.name));
+        auto *name = makeLabel(c.discountBp > 0 ? QStringLiteral("%1 × %2  (wholesale %3 each)")
+                                                      .arg(c.quantity)
+                                                      .arg(c.name, c.unitPrice.toString())
+                                                : QStringLiteral("%1 × %2").arg(c.quantity).arg(c.name));
         name->setWordWrap(true);
         row->addWidget(name, 1);
         auto *total = makeLabel(c.lineTotal().toString());
@@ -253,6 +288,8 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
         rv->addLayout(summaryRow(QStringLiteral("Tax"), price.tax.toString()));
     rv->addWidget(makeDivider());
     rv->addLayout(summaryRow(QStringLiteral("Total"), price.total.toString(), true));
+    if (!price.savings.isZero())
+        rv->addWidget(makeLabel(QStringLiteral("Includes %1 saved with wholesale prices.").arg(price.savings.toString()), "small"));
 
     // Khata is offered only when the shop has given this customer a credit limit.
     // The final check happens again in CheckoutService when the order is placed.

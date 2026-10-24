@@ -165,6 +165,20 @@ private slots:
         QCOMPARE(m_b->scalar(QStringLiteral("SELECT stock FROM products WHERE sku = 'ELEC-1001'")).toInt(), 40);
         QCOMPARE(m_b->scalar(QStringLiteral("SELECT stock FROM products WHERE sku = 'ELEC-1006'")).toInt(), 0);
 
+        // Wholesale prices: some products have tiers, and the bulk orders paid the tier price.
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT COUNT(DISTINCT product_id) FROM product_price_tiers")).toInt(),
+                 DemoSeeder::sampleWholesaleProductCount());
+        QVERIFY(DemoSeeder::sampleWholesaleProductCount() >= 3);
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT stock FROM products WHERE sku = 'SPRT-5004'")).toInt(), 25);
+        // 12 footballs at Rs 3,299 less 10% = Rs 2,969.10 each
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT unit_price_paisa FROM order_items WHERE sku = 'SPRT-5004' AND quantity = 12"))
+                     .toLongLong(),
+                 qint64(296910));
+        // Regular sample orders stay below every tier, so they paid the normal price.
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT COUNT(*) FROM order_items oi JOIN products p ON p.id = oi.product_id "
+                                            "WHERE oi.unit_price_paisa < p.price_paisa")).toInt(),
+                 4); // the 4 lines of the 3 bulk orders
+
         // The hinted account shows orders in several states.
         auto login = m_b->ctx->auth().login(DemoSeeder::kCustomerEmail, DemoSeeder::kCustomerPassword);
         QVERIFY(login.isOk());

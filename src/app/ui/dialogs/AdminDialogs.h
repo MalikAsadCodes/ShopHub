@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/Result.h"
 #include "domain/Types.h"
 #include "ui/UiCommon.h"
 
@@ -61,6 +62,41 @@ private:
     UiContext &m_ui;
     QListWidget *m_list = nullptr;
     QVector<Category> m_categories;
+};
+
+// Wholesale (quantity) prices of one product: up to 5 rows of
+// "from N units, X% off", with the price each and a cost-price warning.
+class PriceTiersDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    static constexpr int kRows = pricetier::kMaxTiersPerProduct;
+
+    PriceTiersDialog(UiContext &ui, const Product &product, QWidget *parent = nullptr);
+    bool isLoaded() const { return m_loaded; }
+
+    // For tests: fill row `row` (0-based); quantity 0 leaves the row empty.
+    void setRow(int row, int fromQuantity, const QString &discountPercent);
+    void save();
+
+private:
+    struct Row
+    {
+        QSpinBox *from = nullptr;
+        QLineEdit *discount = nullptr;
+        QLabel *price = nullptr;
+    };
+
+    // The rows as tiers, or an error message for the admin.
+    Result<QVector<PriceTier>> collect() const;
+    void updatePreview();
+
+    UiContext &m_ui;
+    Product m_product;
+    bool m_loaded = false;
+    QVector<Row> m_rows;
+    QLabel *m_warnings = nullptr;
+    QLabel *m_error = nullptr;
 };
 
 class StockAdjustDialog : public QDialog

@@ -1,11 +1,13 @@
 # ShopHub database
 
-SQLite, schema version **2** (`src/core/database/Migrations.cpp`).
+SQLite, schema version **4** (`src/core/database/Migrations.cpp`).
 
 | Version | Name | What it does |
 |---:|---|---|
 | 1 | `initial_schema` | ShopHub v1 tables |
 | 2 | `khata_ledger` | Khata: `khata_accounts`, `khata_entries`, and `orders` rebuilt so `payment_method` can be `khata` and `payment_status` can be `on_account` |
+| 3 | `wholesale_price_tiers` | Wholesale prices: `product_price_tiers` (quantity discounts per product) |
+| 4 | `wholesale_tier_rules` | Triggers on `product_price_tiers`: at most 5 tiers per product, a bigger quantity never gets a smaller discount |
 
 - Money columns end in `_paisa` and are INTEGER (Rs 1 = 100 paisa).
 - Timestamps are ISO-8601 UTC text, e.g. `2026-10-17T15:30:00Z`.
@@ -32,6 +34,7 @@ erDiagram
     users ||--o| khata_accounts : "credit limit"
     users ||--o{ khata_entries : "owes / pays"
     orders ||--o{ khata_entries : "charged / reversed"
+    products ||--o{ product_price_tiers : "quantity prices"
 ```
 
 ## Tables
@@ -48,6 +51,7 @@ erDiagram
 | `order_items` | Line snapshots | `line_total = unit_price × quantity`; trigger blocks any update; product link becomes NULL if a product is deleted |
 | `order_status_history` | Every status change | Who, when, note |
 | `inventory_movements` | Every stock change | `quantity_change <> 0`, `stock_after >= 0`, reason in (initial, restock, adjustment, damaged, sale, cancel_restock) |
+| `product_price_tiers` | Wholesale (quantity) prices | PK (product, `min_quantity`); `min_quantity` 2-99; `discount_bp` 1-9000 (0.01%-90% off); deleted with the product. Triggers (INSERT and UPDATE) allow at most 5 tiers per product and refuse a bigger quantity with a smaller discount; the catalog service checks the same rules first with `pricetier::validate`. Old orders keep the price paid in `order_items` |
 | `khata_accounts` | Credit limit per customer | One row per customer, `credit_limit_paisa >= 0` (0 = closed) |
 | `khata_entries` | Khata ledger, append-only | kind in (charge, payment, reversal, adjustment); charge > 0 and linked to an order, payment/reversal < 0, never 0; at most one charge and one reversal per order; triggers block every UPDATE and DELETE. Balance = SUM(amount); below zero means the shop holds an advance |
 | `audit_logs` | Security and admin actions | Logins, lockouts, product/category changes, order changes, stock changes |

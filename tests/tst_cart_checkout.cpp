@@ -199,7 +199,106 @@ private slots:
         QCOMPARE(m_b->stockOf(m_kettle), 3);
     }
 
+    // ------------------------------------------------------------------ wholesale prices
+    void cartShowsTierPriceFromTheRightQuantity()
+    {
+        const qint64 oil = wholesaleProduct(); // Rs 1,250; 12+: 5%, 50+: 10%
+        auto &cart = m_b->ctx->cart();
+
+        QVERIFY(cart.add(m_b->customer, oil, 11).isOk());
+        CartItem line = cart.items(m_b->customer).value().first();
+        QCOMPARE(line.unitPrice, Money::fromRupees(1250));
+        QCOMPARE(line.unitsToNextTier(), 1);
+        QCOMPARE(line.nextTierUnitPrice, Money::fromPaisa(118750));
+
+        QVERIFY(cart.add(m_b->customer, oil, 1).isOk()); // now 12
+        line = cart.items(m_b->customer).value().first();
+        QCOMPARE(line.basePrice, Money::fromRupees(1250));
+        QCOMPARE(line.unitPrice, Money::fromPaisa(118750));
+        QCOMPARE(line.discountBp, 500);
+
+        auto s = cart.summary(m_b->customer).value();
+        QCOMPARE(s.subtotal, Money::fromRupees(14250));
+        QCOMPARE(s.savings, Money::fromRupees(750));
+        QCOMPARE(s.shipping, Money()); // free delivery on the discounted subtotal
+
+        QVERIFY(cart.setQuantity(m_b->customer, oil, 50).isOk());
+        QCOMPARE(cart.items(m_b->customer).value().first().unitPrice, Money::fromRupees(1125));
+        QVERIFY(cart.setQuantity(m_b->customer, oil, 11).isOk()); // back below every tier
+        QCOMPARE(cart.items(m_b->customer).value().first().unitPrice, Money::fromRupees(1250));
+    }
+
+    void checkoutStoresTheTierPrice()
+    {
+        const qint64 oil = wholesaleProduct();
+        QVERIFY(m_b->ctx->cart().add(m_b->customer, oil, 12).isOk());
+        QVERIFY(m_b->ctx->cart().add(m_b->customer, m_kettle, 1).isOk()); // no tiers: Rs 2,000
+
+        auto result = m_b->ctx->checkout().placeOrder(m_b->customer, m_b->checkoutRequest());
+        QVERIFY2(result.isOk(), qPrintable(result.error()));
+        const Order o = result.value();
+        QCOMPARE(o.subtotal, Money::fromRupees(14250 + 2000));
+        QCOMPARE(o.total, o.subtotal + o.shipping + o.tax);
+
+        bool sawOil = false;
+        for (const OrderItem &line : o.items) {
+            if (line.sku == QStringLiteral("OIL-5L")) {
+                sawOil = true;
+                QCOMPARE(line.unitPrice, Money::fromPaisa(118750));
+                QCOMPARE(line.quantity, 12);
+                QCOMPARE(line.lineTotal, Money::fromRupees(14250));
+            } else {
+                QCOMPARE(line.unitPrice, Money::fromRupees(2000));
+            }
+        }
+        QVERIFY(sawOil);
+    }
+
+    void oldOrdersKeepTheirTierPrice()
+    {
+        const qint64 oil = wholesaleProduct();
+        QVERIFY(m_b->ctx->cart().add(m_b->customer, oil, 12).isOk());
+        QVERIFY(m_b->ctx->checkout().placeOrder(m_b->customer, m_b->checkoutRequest()).isOk());
+
+        // The shop removes the tiers afterwards; the order still shows what was paid.
+        QVERIFY(m_b->ctx->catalog().setPriceTiers(m_b->admin, oil, {}).isOk());
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT unit_price_paisa FROM order_items WHERE sku = 'OIL-5L'")).toLongLong(),
+                 qint64(118750));
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT subtotal_paisa FROM orders")).toLongLong(), qint64(1425000));
+    }
+
+    void checkoutUsesTiersSavedAfterTheCartWasFilled()
+    {
+        // The price is worked out again inside the checkout transaction, never taken from the screen.
+        const qint64 oil = wholesaleProduct();
+        QVERIFY(m_b->ctx->cart().add(m_b->customer, oil, 12).isOk());
+        PriceTier better;
+        better.minQuantity = 10;
+        better.discountBp = 2000;
+        QVERIFY(m_b->ctx->catalog().setPriceTiers(m_b->admin, oil, {better}).isOk());
+
+        auto result = m_b->ctx->checkout().placeOrder(m_b->customer, m_b->checkoutRequest());
+        QVERIFY2(result.isOk(), qPrintable(result.error()));
+        QCOMPARE(result.value().subtotal, Money::fromRupees(12000)); // 12 x Rs 1,000
+    }
+
 private:
+    // A 5-litre cooking oil sold by the carton: Rs 1,250, 12 or more 5% off, 50 or more 10% off.
+    qint64 wholesaleProduct()
+    {
+        const qint64 id = m_b->addProduct(QStringLiteral("OIL-5L"), 1250, 99, QStringLiteral("Cooking oil 5L"));
+        PriceTier dozen;
+        dozen.minQuantity = 12;
+        dozen.discountBp = 500;
+        PriceTier carton;
+        carton.minQuantity = 50;
+        carton.discountBp = 1000;
+        const Status st = m_b->ctx->catalog().setPriceTiers(m_b->admin, id, {dozen, carton});
+        if (!st)
+            qWarning() << "setPriceTiers failed:" << st.error();
+        return id;
+    }
+
     std::unique_ptr<test::Backend> m_b;
     qint64 m_kettle = 0;
     qint64 m_lamp = 0;

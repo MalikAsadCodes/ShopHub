@@ -14,7 +14,8 @@ namespace {
 const QString kSelectProduct = QStringLiteral(
     "SELECT p.id, p.sku, p.name, p.description, p.category_id, c.name, p.brand, p.price_paisa, "
     "       p.cost_paisa, p.stock, p.low_stock_threshold, p.is_active, p.image_file, "
-    "       p.created_at, p.updated_at, COALESCE(s.sold, 0), c.is_active "
+    "       p.created_at, p.updated_at, COALESCE(s.sold, 0), c.is_active, "
+    "       (SELECT MIN(t.min_quantity) FROM product_price_tiers t WHERE t.product_id = p.id) "
     "FROM products p "
     "JOIN categories c ON c.id = p.category_id "
     "LEFT JOIN (SELECT oi.product_id, SUM(oi.quantity) AS sold "
@@ -42,6 +43,7 @@ Product readProduct(const QSqlQuery &q)
     p.createdAt = sql::fromDb(q.value(13));
     p.updatedAt = sql::fromDb(q.value(14));
     p.unitsSold = q.value(15).toInt();
+    p.wholesaleFrom = q.value(17).isNull() ? 0 : q.value(17).toInt();
     return p;
 }
 
@@ -304,6 +306,92 @@ Result<QVector<InventoryMovement>> ProductRepository::movements(qint64 productId
         out.push_back(m);
     }
     return out;
+}
+
+Result<QVector<PriceTier>> ProductRepository::tiersFor(qint64 productId) const
+{
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT min_quantity, discount_bp FROM product_price_tiers "
+                             "WHERE product_id = :p ORDER BY min_quantity"));
+    q.bindValue(QStringLiteral(":p"), productId);
+    if (auto st = sql::exec(q, "ProductRepository::tiersFor"); !st)
+        return st;
+
+    QVector<PriceTier> out;
+    while (q.next()) {
+        PriceTier t;
+        t.minQuantity = q.value(0).toInt();
+        t.discountBp = q.value(1).toInt();
+        out.push_back(t);
+    }
+    return out;
+}
+
+Result<QHash<qint64, QVector<PriceTier>>> ProductRepository::tiersForProducts(const QVector<qint64> &productIds) const
+{
+    QHash<qint64, QVector<PriceTier>> out;
+    if (productIds.isEmpty())
+        return out;
+
+    QStringList placeholders;
+    for (int i = 0; i < productIds.size(); ++i)
+        placeholders << QStringLiteral(":p%1").arg(i);
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT product_id, min_quantity, discount_bp FROM product_price_tiers "
+                             "WHERE product_id IN (%1) ORDER BY product_id, min_quantity")
+                  .arg(placeholders.join(QStringLiteral(", "))));
+    for (int i = 0; i < productIds.size(); ++i)
+        q.bindValue(placeholders.at(i), productIds.at(i));
+    if (auto st = sql::exec(q, "ProductRepository::tiersForProducts"); !st)
+        return st;
+
+    while (q.next()) {
+        PriceTier t;
+        t.minQuantity = q.value(1).toInt();
+        t.discountBp = q.value(2).toInt();
+        out[q.value(0).toLongLong()].push_back(t);
+    }
+    return out;
+}
+
+Status ProductRepository::replaceTiers(qint64 productId, const QVector<PriceTier> &tiers)
+{
+    // A savepoint makes this all-or-nothing on its own: inside the caller's
+    // Transaction it nests, and without one SQLite starts a transaction for it.
+    const QSqlDatabase conn = db();
+    if (auto st = sql::execRaw(conn, QStringLiteral("SAVEPOINT replace_tiers"), "ProductRepository::replaceTiers");
+        !st)
+        return st;
+
+    auto undo = [&conn](Status failed) {
+        sql::execRaw(conn, QStringLiteral("ROLLBACK TO replace_tiers"), "ProductRepository::replaceTiers(undo)");
+        sql::execRaw(conn, QStringLiteral("RELEASE replace_tiers"), "ProductRepository::replaceTiers(undo)");
+        return failed;
+    };
+
+    {
+        QSqlQuery del(conn);
+        del.prepare(QStringLiteral("DELETE FROM product_price_tiers WHERE product_id = :p"));
+        del.bindValue(QStringLiteral(":p"), productId);
+        if (auto st = sql::exec(del, "ProductRepository::replaceTiers(delete)"); !st)
+            return undo(st);
+
+        QSqlQuery ins(conn);
+        ins.prepare(QStringLiteral("INSERT INTO product_price_tiers (product_id, min_quantity, discount_bp) "
+                                   "VALUES (:p, :q, :d)"));
+        for (const PriceTier &t : tiers) {
+            ins.bindValue(QStringLiteral(":p"), productId);
+            ins.bindValue(QStringLiteral(":q"), t.minQuantity);
+            ins.bindValue(QStringLiteral(":d"), t.discountBp);
+            if (auto st = sql::exec(ins, "ProductRepository::replaceTiers(insert)"); !st)
+                return undo(st);
+        }
+    } // the statements are finished before the savepoint is released
+
+    if (auto st = sql::execRaw(conn, QStringLiteral("RELEASE replace_tiers"), "ProductRepository::replaceTiers");
+        !st)
+        return undo(st);
+    return Status::ok();
 }
 
 } // namespace shophub

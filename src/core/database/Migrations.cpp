@@ -276,6 +276,70 @@ END)"),
     };
 }
 
+// --------------------------------------------------------------------------
+// Migration 3: wholesale (quantity) prices, v2 milestone 2. See docs/WHOLESALE.md.
+// One row per tier: "buy min_quantity or more of this product, get discount_bp off".
+// The table enforces the ranges from pricetier:: in domain/PriceTier.h; they are
+// written out here on purpose, because a shipped migration must never change.
+// The catalog service checks the rest (at most 5 tiers, more units never cost
+// more per unit). Deleting a product deletes its tiers. Old orders are not
+// affected: order_items already stores the unit price that was paid.
+// --------------------------------------------------------------------------
+QStringList migration3()
+{
+    return {
+        QStringLiteral(R"(
+CREATE TABLE product_price_tiers (
+    product_id    INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    min_quantity  INTEGER NOT NULL CHECK (min_quantity BETWEEN 2 AND 99),
+    discount_bp   INTEGER NOT NULL CHECK (discount_bp BETWEEN 1 AND 9000),
+    PRIMARY KEY (product_id, min_quantity)
+) WITHOUT ROWID)"),
+    };
+}
+
+// --------------------------------------------------------------------------
+// Migration 4: the database also enforces the two wholesale rules that span
+// several rows, as a safety net behind pricetier::validate (which gives the
+// admin a clear message first):
+//  - at most 5 tiers per product
+//  - a bigger quantity never gets a smaller discount (an equal one is fine)
+// Every subset of a valid tier list is valid too, so a good list can always
+// be saved one row at a time in any order. UPDATE is covered as well, so the
+// rules hold even for writes the app itself never makes.
+// --------------------------------------------------------------------------
+QStringList migration4()
+{
+    return {
+        QStringLiteral(R"(
+CREATE TRIGGER trg_price_tiers_insert
+BEFORE INSERT ON product_price_tiers
+BEGIN
+    SELECT RAISE(ABORT, 'a product can have at most 5 quantity prices')
+    WHERE (SELECT COUNT(*) FROM product_price_tiers WHERE product_id = NEW.product_id) >= 5;
+    SELECT RAISE(ABORT, 'buying more units must not cost more per unit')
+    WHERE EXISTS (SELECT 1 FROM product_price_tiers t
+                  WHERE t.product_id = NEW.product_id
+                    AND ((t.min_quantity < NEW.min_quantity AND t.discount_bp > NEW.discount_bp)
+                      OR (t.min_quantity > NEW.min_quantity AND t.discount_bp < NEW.discount_bp)));
+END)"),
+        QStringLiteral(R"(
+CREATE TRIGGER trg_price_tiers_update
+BEFORE UPDATE ON product_price_tiers
+BEGIN
+    SELECT RAISE(ABORT, 'a product can have at most 5 quantity prices')
+    WHERE NEW.product_id <> OLD.product_id
+      AND (SELECT COUNT(*) FROM product_price_tiers WHERE product_id = NEW.product_id) >= 5;
+    SELECT RAISE(ABORT, 'buying more units must not cost more per unit')
+    WHERE EXISTS (SELECT 1 FROM product_price_tiers t
+                  WHERE t.product_id = NEW.product_id
+                    AND NOT (t.product_id = OLD.product_id AND t.min_quantity = OLD.min_quantity)
+                    AND ((t.min_quantity < NEW.min_quantity AND t.discount_bp > NEW.discount_bp)
+                      OR (t.min_quantity > NEW.min_quantity AND t.discount_bp < NEW.discount_bp)));
+END)"),
+    };
+}
+
 } // namespace
 
 Migrator::Migrator(QString connectionName)
@@ -288,6 +352,8 @@ const QVector<Migration> &Migrator::migrations()
     static const QVector<Migration> all = {
         {1, QStringLiteral("initial_schema"), migration1()},
         {2, QStringLiteral("khata_ledger"), migration2(), true},
+        {3, QStringLiteral("wholesale_price_tiers"), migration3()},
+        {4, QStringLiteral("wholesale_tier_rules"), migration4()},
     };
     return all;
 }

@@ -46,8 +46,8 @@ can be tested without opening a window. `AppContext` builds and owns the whole b
 | `Migrator` | Applies numbered migrations once each, recorded in `schema_migrations` |
 | `PasswordHasher` | PBKDF2-HMAC-SHA512, 210k iterations, 16-byte salt, constant-time compare, rehash on login if parameters were raised |
 | `AuthService` | Register, login, lockout (5 failures → 15 min), first-admin setup, password change, audit |
-| `CatalogService` | Search/filter/sort/page, product + category admin, hides cost price and inactive items from customers |
-| `PricingService` | Subtotal, delivery (flat / free above threshold), tax on goods |
+| `CatalogService` | Search/filter/sort/page, product + category admin, wholesale price tiers, hides cost price and inactive items from customers |
+| `PricingService` | Wholesale tier prices per cart line, subtotal, delivery (flat / free above threshold), tax on goods |
 | `CartService` | Persistent cart with stock and per-line limits |
 | `CheckoutService` | Validates and places an order atomically and idempotently |
 | `OrderService` | Order lists/details with ownership checks, status transitions, cancellation with restock |

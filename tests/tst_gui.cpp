@@ -21,6 +21,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSpinBox>
 #include <QTableView>
 
 using namespace shophub;
@@ -326,6 +327,110 @@ private slots:
         QTest::qWait(20);
         shot(&window, "16-shop-dark");
         Theme::apply(ThemeMode::Light);
+    }
+
+    void wholesalePricesFromAdminToCheckout()
+    {
+        ProductFilter f;
+        f.text = QStringLiteral("Match Football");
+        const Product football = m_ctx->catalog().search(m_admin, f).value().items.first();
+        QCOMPARE(football.wholesaleFrom, 6); // sample data: 6+ 5%, 12+ 10%, 24+ 15%
+
+        // ---- admin: the quantity prices editor
+        {
+            MainWindow window(*m_ctx, m_admin);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            window.navigate(QStringLiteral("products"));
+            QVERIFY(buttonWithText(&window, QStringLiteral("Quantity prices...")));
+
+            PriceTiersDialog dialog(window.uiContext(), football, &window);
+            QVERIFY(dialog.isLoaded());
+            dialog.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+            auto spins = dialog.findChildren<QSpinBox *>();
+            QCOMPARE(spins.size(), PriceTiersDialog::kRows);
+            QCOMPARE(spins.at(0)->value(), 6); // the saved tiers are filled in, in order
+            QCOMPARE(spins.at(2)->value(), 24);
+            QCOMPARE(spins.at(3)->value(), 0);
+
+            // A bigger quantity with a smaller discount is refused with a message.
+            dialog.setRow(3, 50, QStringLiteral("12"));
+            dialog.save();
+            QVERIFY(dialog.result() != QDialog::Accepted);
+            bool errorShown = false;
+            for (QLabel *l : dialog.findChildren<QLabel *>())
+                errorShown = errorShown || (l->isVisible() && l->text().contains(QStringLiteral("must not cost more")));
+            QVERIFY(errorShown);
+
+            // 60 or more at 50% off is below the cost price: allowed, with a warning.
+            dialog.setRow(3, 50, QStringLiteral("20"));
+            dialog.setRow(4, 60, QStringLiteral("50"));
+            bool warningShown = false;
+            for (QLabel *l : dialog.findChildren<QLabel *>())
+                warningShown = warningShown || (l->isVisible() && l->text().startsWith(QStringLiteral("Below the cost price")));
+            QVERIFY(warningShown);
+            shot(&dialog, "19-quantity-prices");
+            dialog.save();
+            QCOMPARE(dialog.result(), int(QDialog::Accepted));
+            QCOMPARE(m_ctx->catalog().priceTiers(m_admin, football.id).value().size(), 5);
+        }
+
+        // ---- customer: badge, product page, cart hint, checkout
+        MainWindow window(*m_ctx, m_customer);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.navigate(QStringLiteral("shop"));
+        QTest::qWait(20);
+        // 6 sample products have quantity prices; the first page of the shop shows most of them.
+        bool badgeShown = false;
+        for (ProductCard *card : window.findChildren<ProductCard *>())
+            for (QLabel *l : card->findChildren<QLabel *>())
+                badgeShown = badgeShown || l->text().startsWith(QStringLiteral("Wholesale "));
+        QVERIFY(badgeShown);
+
+        {
+            ProductDetailsDialog details(window.uiContext(), football.id, &window);
+            QVERIFY(details.isLoaded());
+            details.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&details));
+            bool tableShown = false;
+            for (QLabel *l : details.findChildren<QLabel *>())
+                tableShown = tableShown || l->text() == QStringLiteral("Buy more, pay less");
+            QVERIFY(tableShown);
+            shot(&details, "20-product-wholesale");
+        }
+
+        QVERIFY(m_ctx->cart().clear(m_customer).isOk());
+        QVERIFY(m_ctx->cart().add(m_customer, football.id, 11).isOk()); // 6+ applies, 12+ is one away
+        window.navigate(QStringLiteral("cart"));
+        QTest::qWait(20);
+        QPushButton *addOne = buttonWithText(&window, QStringLiteral("Add 1"));
+        QVERIFY(addOne);
+        QTest::mouseClick(addOne, Qt::LeftButton);
+        QTest::qWait(20);
+        const CartItem line = m_ctx->cart().items(m_customer).value().first();
+        QCOMPARE(line.quantity, 12);
+        QCOMPARE(line.unitPrice, Money::fromPaisa(296910)); // Rs 3,299 less 10%
+        bool savingsShown = false;
+        for (QLabel *l : window.findChildren<QLabel *>())
+            savingsShown = savingsShown || (l->isVisible() && l->text().startsWith(QStringLiteral("You save")));
+        QVERIFY(savingsShown);
+        shot(&window, "21-cart-wholesale");
+
+        CheckoutDialog checkout(window.uiContext(), &window);
+        checkout.resize(960, 620);
+        checkout.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&checkout));
+        QPushButton *place = nullptr;
+        for (QPushButton *b : checkout.findChildren<QPushButton *>())
+            if (b->text().startsWith(QStringLiteral("Place order")))
+                place = b;
+        QVERIFY(place);
+        QTest::mouseClick(place, Qt::LeftButton);
+        QCOMPARE(checkout.result(), int(QDialog::Accepted));
+        QCOMPARE(checkout.placedOrder().subtotal, Money::fromPaisa(296910 * 12));
+        QCOMPARE(checkout.placedOrder().items.first().unitPrice, Money::fromPaisa(296910));
     }
 
     void cleanupTestCase()

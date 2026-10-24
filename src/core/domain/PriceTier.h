@@ -9,6 +9,7 @@
 
 #include "common/Money.h"
 
+#include <QRegularExpression>
 #include <QString>
 #include <QVector>
 #include <optional>
@@ -97,6 +98,34 @@ inline QString validate(const QVector<PriceTier> &tiers)
         }
     }
     return QString();
+}
+
+// Basis points as a percentage for people to read: 500 -> "5", 250 -> "2.50".
+// Integer maths only, so it never shows a rounding artefact.
+inline QString percentText(int basisPoints)
+{
+    QString text = QString::number(basisPoints / 100);
+    if (basisPoints % 100 != 0)
+        text += QStringLiteral(".%1").arg(basisPoints % 100, 2, 10, QLatin1Char('0'));
+    return text;
+}
+
+// What an admin types as a discount ("5", "2.5", "12.75%") to basis points.
+// Empty when it is not a percentage with at most 2 decimals. The range
+// (more than 0, at most 90) is checked by validate().
+inline std::optional<int> parsePercent(const QString &input)
+{
+    QString text = input.trimmed();
+    if (text.endsWith(QLatin1Char('%')))
+        text.chop(1);
+    static const QRegularExpression pattern(QStringLiteral("^(\\d{1,3})(?:\\.(\\d{1,2}))?$"));
+    const QRegularExpressionMatch m = pattern.match(text.trimmed());
+    if (!m.hasMatch())
+        return std::nullopt;
+    QString fraction = m.captured(2);
+    while (fraction.size() < 2)
+        fraction.append(QLatin1Char('0')); // "5" -> 50 basis points
+    return m.captured(1).toInt() * 100 + fraction.toInt();
 }
 
 } // namespace pricetier

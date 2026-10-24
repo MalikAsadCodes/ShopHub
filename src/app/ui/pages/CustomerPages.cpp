@@ -444,7 +444,40 @@ QWidget *CartPage::buildRow(const CartItem &item)
     connect(name, &QPushButton::clicked, this, [this, id = item.productId] { emit m_ui.events->openProduct(id); });
     info->addWidget(name, 0, Qt::AlignLeft);
     info->addWidget(makeLabel(QStringLiteral("%1  ·  %2").arg(item.sku, item.categoryName), "small"));
-    info->addWidget(makeLabel(QStringLiteral("%1 each").arg(item.unitPrice.toString()), "muted"));
+    if (item.discountBp > 0) {
+        auto *priceLine = new QHBoxLayout();
+        priceLine->setSpacing(8);
+        priceLine->addWidget(makeLabel(QStringLiteral("%1 each  (normal %2)").arg(item.unitPrice.toString(), item.basePrice.toString()),
+                                       "muted"));
+        priceLine->addWidget(makeBadge(QStringLiteral("Wholesale price · %1% off").arg(pricetier::percentText(item.discountBp)),
+                                       QStringLiteral("success")));
+        priceLine->addStretch();
+        info->addLayout(priceLine);
+    } else {
+        info->addWidget(makeLabel(QStringLiteral("%1 each").arg(item.unitPrice.toString()), "muted"));
+    }
+
+    // "Add 3 more to pay Rs 1,187.50 each" - only when the shop has enough stock for it.
+    if (item.nextTier && item.productActive && item.nextTier->minQuantity <= item.availableStock) {
+        const int more = item.unitsToNextTier();
+        auto *hintLine = new QHBoxLayout();
+        hintLine->setSpacing(6);
+        hintLine->addWidget(makeLabel(QStringLiteral("Buy %1 more to pay %2 each.").arg(more).arg(item.nextTierUnitPrice.toString()),
+                                      "small"));
+        auto *addMore = makeButton(QStringLiteral("Add %1").arg(more), "link");
+        addMore->setAccessibleName(QStringLiteral("Add %1 more %2 for the wholesale price").arg(more).arg(item.name));
+        connect(addMore, &QPushButton::clicked, this,
+                [this, id = item.productId, target = item.nextTier->minQuantity] {
+                    const Status st = m_ui.app.cart().setQuantity(m_ui.session, id, target);
+                    if (!st)
+                        emit m_ui.events->toast(st.error());
+                    QTimer::singleShot(0, m_ui.events, &AppEvents::cartChanged);
+                });
+        hintLine->addWidget(addMore);
+        hintLine->addStretch();
+        info->addLayout(hintLine);
+    }
+
     const QStringList problems = CartService::problems({item});
     if (!problems.isEmpty()) {
         auto *warn = makeLabel(problems.first(), "error");
@@ -517,6 +550,9 @@ void CartPage::refresh()
         m_summary->addLayout(summaryLine(QStringLiteral("Tax"), price.tax.toString()));
     m_summary->addWidget(makeDivider());
     m_summary->addLayout(summaryLine(QStringLiteral("Total"), price.total.toString(), true));
+    if (!price.savings.isZero())
+        m_summary->addWidget(makeBadge(QStringLiteral("You save %1 with wholesale prices").arg(price.savings.toString()),
+                                       QStringLiteral("success")));
 
     const Money threshold = m_ui.app.pricing().rules().freeShippingThreshold;
     if (!price.shipping.isZero() && price.subtotal < threshold)

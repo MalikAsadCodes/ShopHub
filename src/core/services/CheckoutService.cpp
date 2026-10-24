@@ -95,8 +95,8 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
         return *order.value();
     }
 
-    // 2. Re-read the cart inside the transaction and check stock.
-    auto cart = m_repos.carts.items(session.userId());
+    // 2. Re-read the cart inside the transaction (with wholesale prices) and check stock.
+    auto cart = CartService::pricedCart(m_repos, session.userId());
     if (!cart)
         return cart.status();
     const QVector<CartItem> items = cart.value();
@@ -147,7 +147,7 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
         line.productId = c.productId;
         line.sku = c.sku;
         line.productName = c.name;
-        line.unitPrice = c.unitPrice;
+        line.unitPrice = c.unitPrice; // the wholesale price when a tier applied: the order keeps what was paid
         line.quantity = c.quantity;
         line.lineTotal = c.lineTotal();
         order.items.push_back(line);

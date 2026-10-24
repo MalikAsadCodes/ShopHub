@@ -15,7 +15,7 @@ class ProductTableModel : public QAbstractTableModel
 {
     Q_OBJECT
 public:
-    enum Column { Sku, Name, Category, Brand, Price, Cost, Stock, LowAt, StockState, Status };
+    enum Column { Sku, Name, Category, Brand, Price, Cost, Stock, LowAt, StockState, Status, Wholesale };
 
     explicit ProductTableModel(QVector<Column> columns, QObject *parent = nullptr);
 
