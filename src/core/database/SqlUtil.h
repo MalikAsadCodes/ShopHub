@@ -25,6 +25,7 @@ Status execRaw(const QSqlDatabase &db, const QString &statement, const char *con
 bool isUniqueViolation(const QSqlQuery &query);
 
 QString nowUtc();                                  // ISO-8601, UTC, e.g. 2026-10-17T15:30:00Z
+QDate todayLocal();                                // the user's local date of nowUtc() (qist due dates)
 
 // Sample data only: while one of these exists, nowUtc() returns the given time,
 // so backdated sample records (including khata entries, which can never be

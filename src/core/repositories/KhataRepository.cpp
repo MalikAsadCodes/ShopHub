@@ -9,11 +9,15 @@ namespace shophub {
 
 namespace {
 
-// One row per customer: id, name, email, limit, balance, last activity.
+// One row per customer: id, name, email, limit, balance, last activity,
+// the qist part of the balance, and whether qist is allowed.
 const QString kSelectAccount = QStringLiteral(
-    "SELECT u.id, u.full_name, u.email, COALESCE(a.credit_limit_paisa, 0), "
+    "SELECT u.id, u.full_name, u.email, COALESCE(a.credit_limit_paisa, 0) AS credit_limit, "
     "       COALESCE((SELECT SUM(e.amount_paisa) FROM khata_entries e WHERE e.user_id = u.id), 0) AS bal, "
-    "       (SELECT MAX(e.created_at) FROM khata_entries e WHERE e.user_id = u.id) "
+    "       (SELECT MAX(e.created_at) FROM khata_entries e WHERE e.user_id = u.id) AS last_activity, "
+    "       COALESCE((SELECT SUM(e.amount_paisa) FROM khata_entries e "
+    "                 WHERE e.user_id = u.id AND e.qist_id IS NOT NULL), 0) AS qist_bal, "
+    "       COALESCE(a.qist_approved, 0) AS qist_ok "
     "FROM users u LEFT JOIN khata_accounts a ON a.user_id = u.id "
     "WHERE u.role = 'customer' ");
 
@@ -26,6 +30,8 @@ KhataAccount readAccount(const QSqlQuery &q)
     a.creditLimit = Money::fromPaisa(q.value(3).toLongLong());
     a.balance = Money::fromPaisa(q.value(4).toLongLong());
     a.lastActivity = sql::fromDb(q.value(5));
+    a.qistBalance = Money::fromPaisa(q.value(6).toLongLong());
+    a.qistApproved = q.value(7).toInt() == 1;
     return a;
 }
 
@@ -99,7 +105,7 @@ Result<Money> KhataRepository::balance(qint64 userId) const
 }
 
 Result<Money> KhataRepository::append(qint64 userId, KhataKind kind, Money amount, qint64 orderId,
-                                      const QString &note, qint64 createdBy, const QDateTime &at)
+                                      const QString &note, qint64 createdBy, const QDateTime &at, qint64 qistId)
 {
     auto current = balance(userId);
     if (!current)
@@ -109,7 +115,7 @@ Result<Money> KhataRepository::append(qint64 userId, KhataKind kind, Money amoun
     QSqlQuery q(db());
     q.prepare(QStringLiteral(
         "INSERT INTO khata_entries (user_id, kind, amount_paisa, balance_after_paisa, order_id, note, "
-        "  created_by, created_at) VALUES (:u, :k, :a, :b, :o, :n, :by, :at)"));
+        "  created_by, created_at, qist_id) VALUES (:u, :k, :a, :b, :o, :n, :by, :at, :q)"));
     q.bindValue(QStringLiteral(":u"), userId);
     q.bindValue(QStringLiteral(":k"), khataKindToDb(kind));
     q.bindValue(QStringLiteral(":a"), amount.paisa());
@@ -118,6 +124,7 @@ Result<Money> KhataRepository::append(qint64 userId, KhataKind kind, Money amoun
     q.bindValue(QStringLiteral(":n"), sql::text(note));
     q.bindValue(QStringLiteral(":by"), sql::nullable(createdBy));
     q.bindValue(QStringLiteral(":at"), at.isValid() ? sql::toDb(at) : sql::nowUtc());
+    q.bindValue(QStringLiteral(":q"), sql::nullable(qistId));
     if (auto st = sql::exec(q, "KhataRepository::append"); !st)
         return st;
     return after;
@@ -140,7 +147,8 @@ Result<QVector<KhataEntry>> KhataRepository::entries(qint64 userId, int limit) c
     QSqlQuery q(db());
     q.prepare(QStringLiteral(
         "SELECT e.id, e.user_id, e.kind, e.amount_paisa, e.balance_after_paisa, COALESCE(e.order_id, 0), "
-        "       COALESCE(o.order_number, ''), e.note, COALESCE(u.full_name, ''), e.created_at "
+        "       COALESCE(o.order_number, ''), e.note, COALESCE(u.full_name, ''), e.created_at, "
+        "       COALESCE(e.qist_id, 0) "
         "FROM khata_entries e "
         "LEFT JOIN orders o ON o.id = e.order_id "
         "LEFT JOIN users u ON u.id = e.created_by "
@@ -162,6 +170,7 @@ Result<QVector<KhataEntry>> KhataRepository::entries(qint64 userId, int limit) c
         e.note = q.value(7).toString();
         e.createdBy = q.value(8).toString();
         e.createdAt = sql::fromDb(q.value(9));
+        e.qistId = q.value(10).toLongLong();
         out.push_back(e);
     }
     return out;
@@ -172,7 +181,8 @@ Result<QPair<Money, int>> KhataRepository::outstanding() const
     QSqlQuery q(db());
     q.prepare(QStringLiteral(
         "SELECT COALESCE(SUM(bal), 0), COUNT(*) FROM "
-        "(SELECT SUM(amount_paisa) AS bal FROM khata_entries GROUP BY user_id) WHERE bal > 0"));
+        "(SELECT SUM(amount_paisa) AS bal FROM khata_entries WHERE qist_id IS NULL GROUP BY user_id) "
+        "WHERE bal > 0"));
     if (auto st = sql::exec(q, "KhataRepository::outstanding"); !st)
         return st;
     q.next();

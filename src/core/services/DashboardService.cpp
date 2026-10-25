@@ -1,6 +1,7 @@
 #include "services/DashboardService.h"
 
 #include "services/Access.h"
+#include "services/QistService.h"
 
 #include <QMap>
 
@@ -45,6 +46,12 @@ Result<DashboardStats> DashboardService::stats(const Session &session) const
         return khata.status();
     s.khataOutstanding = khata.value().first;
     s.khataDebtors = khata.value().second;
+
+    auto qist = QistService::outstanding(m_repos, QistService::today());
+    if (!qist)
+        return qist.status();
+    s.qistOutstanding = qist.value().first;
+    s.qistOverdue = qist.value().second;
 
     auto top = m_repos.orders.topProducts(5);
     if (!top)

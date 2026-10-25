@@ -15,7 +15,8 @@ const QString kSelectProduct = QStringLiteral(
     "SELECT p.id, p.sku, p.name, p.description, p.category_id, c.name, p.brand, p.price_paisa, "
     "       p.cost_paisa, p.stock, p.low_stock_threshold, p.is_active, p.image_file, "
     "       p.created_at, p.updated_at, COALESCE(s.sold, 0), c.is_active, "
-    "       (SELECT MIN(t.min_quantity) FROM product_price_tiers t WHERE t.product_id = p.id) "
+    "       (SELECT MIN(t.min_quantity) FROM product_price_tiers t WHERE t.product_id = p.id), "
+    "       p.qist_allowed "
     "FROM products p "
     "JOIN categories c ON c.id = p.category_id "
     "LEFT JOIN (SELECT oi.product_id, SUM(oi.quantity) AS sold "
@@ -44,6 +45,7 @@ Product readProduct(const QSqlQuery &q)
     p.updatedAt = sql::fromDb(q.value(14));
     p.unitsSold = q.value(15).toInt();
     p.wholesaleFrom = q.value(17).isNull() ? 0 : q.value(17).toInt();
+    p.qistAllowed = q.value(18).toInt() == 1;
     return p;
 }
 
@@ -149,8 +151,8 @@ Result<qint64> ProductRepository::insert(const ProductInput &in, int initialStoc
     QSqlQuery q(db());
     q.prepare(QStringLiteral(
         "INSERT INTO products (sku, name, description, category_id, brand, price_paisa, cost_paisa, "
-        "  stock, low_stock_threshold, image_file, created_at, updated_at) "
-        "VALUES (:sku, :name, :desc, :cat, :brand, :price, :cost, :stock, :low, :img, :c, :u)"));
+        "  stock, low_stock_threshold, image_file, qist_allowed, created_at, updated_at) "
+        "VALUES (:sku, :name, :desc, :cat, :brand, :price, :cost, :stock, :low, :img, :qist, :c, :u)"));
     q.bindValue(QStringLiteral(":sku"), in.sku);
     q.bindValue(QStringLiteral(":name"), in.name);
     q.bindValue(QStringLiteral(":desc"), sql::text(in.description));
@@ -161,6 +163,7 @@ Result<qint64> ProductRepository::insert(const ProductInput &in, int initialStoc
     q.bindValue(QStringLiteral(":stock"), initialStock);
     q.bindValue(QStringLiteral(":low"), in.lowStockThreshold);
     q.bindValue(QStringLiteral(":img"), sql::text(in.imageFile));
+    q.bindValue(QStringLiteral(":qist"), in.qistAllowed ? 1 : 0);
     q.bindValue(QStringLiteral(":c"), now);
     q.bindValue(QStringLiteral(":u"), now);
     if (auto st = sql::exec(q, "ProductRepository::insert"); !st)
@@ -174,7 +177,7 @@ Status ProductRepository::update(qint64 id, const ProductInput &in)
     q.prepare(QStringLiteral(
         "UPDATE products SET sku = :sku, name = :name, description = :desc, category_id = :cat, "
         "  brand = :brand, price_paisa = :price, cost_paisa = :cost, low_stock_threshold = :low, "
-        "  image_file = :img, updated_at = :u "
+        "  image_file = :img, qist_allowed = :qist, updated_at = :u "
         "WHERE id = :id"));
     q.bindValue(QStringLiteral(":sku"), in.sku);
     q.bindValue(QStringLiteral(":name"), in.name);
@@ -185,9 +188,20 @@ Status ProductRepository::update(qint64 id, const ProductInput &in)
     q.bindValue(QStringLiteral(":cost"), costValue(in));
     q.bindValue(QStringLiteral(":low"), in.lowStockThreshold);
     q.bindValue(QStringLiteral(":img"), sql::text(in.imageFile));
+    q.bindValue(QStringLiteral(":qist"), in.qistAllowed ? 1 : 0);
     q.bindValue(QStringLiteral(":u"), sql::nowUtc());
     q.bindValue(QStringLiteral(":id"), id);
     return sql::exec(q, "ProductRepository::update");
+}
+
+Status ProductRepository::setQistAllowed(qint64 id, bool allowed)
+{
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("UPDATE products SET qist_allowed = :a, updated_at = :u WHERE id = :id"));
+    q.bindValue(QStringLiteral(":a"), allowed ? 1 : 0);
+    q.bindValue(QStringLiteral(":u"), sql::nowUtc());
+    q.bindValue(QStringLiteral(":id"), id);
+    return sql::exec(q, "ProductRepository::setQistAllowed");
 }
 
 Status ProductRepository::setActive(qint64 id, bool active)

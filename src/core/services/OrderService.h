@@ -19,10 +19,11 @@ public:
 
     // Admin: move an order one step forward (Pending -> Confirmed -> ... -> Delivered).
     // Delivered marks a Cash on Delivery order as paid; khata orders stay "on khata".
+    // A qist order can be delivered only after its down payment is recorded.
     Status advance(const Session &session, qint64 orderId, OrderStatus to, const QString &note = QString());
 
     // Customer (Pending/Confirmed, own orders) or admin (up to Processing).
-    // Cancelling puts the items back into stock and takes a khata order off the khata.
+    // Cancelling puts the items back into stock and takes a khata or qist order off the khata.
     Status cancel(const Session &session, qint64 orderId, const QString &reason);
 
 private:

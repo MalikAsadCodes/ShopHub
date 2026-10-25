@@ -14,6 +14,7 @@
 #include "services/KhataService.h"
 #include "services/OrderService.h"
 #include "services/PricingService.h"
+#include "services/QistService.h"
 
 #include <memory>
 
@@ -45,6 +46,7 @@ public:
     InventoryService &inventory() { return *m_inventory; }
     DashboardService &dashboard() { return *m_dashboard; }
     KhataService &khata() { return *m_khata; }
+    QistService &qist() { return *m_qist; }
     const PricingService &pricing() const { return *m_pricing; }
     const ImageStore &images() const { return *m_images; }
     SettingsRepository &settings() { return m_repos->settings; }
@@ -70,6 +72,7 @@ private:
     std::unique_ptr<InventoryService> m_inventory;
     std::unique_ptr<DashboardService> m_dashboard;
     std::unique_ptr<KhataService> m_khata;
+    std::unique_ptr<QistService> m_qist;
 };
 
 } // namespace shophub

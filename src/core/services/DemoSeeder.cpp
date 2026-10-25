@@ -329,13 +329,371 @@ const QVector<DemoOrder> &sampleOrders()
         {4, {{"BEAU-6002", 1}}, OrderStatus::Pending, 0},
         {2, {{"FASH-2003", 1}, {"SPRT-5004", 1}}, OrderStatus::Pending, 0},
         {0, {{"HOME-3002", 1}}, OrderStatus::Pending, 0},
-        // Bulk orders at wholesale prices (Cash on Delivery):
+    };
+    return orders;
+}
+
+// ---------------------------------------------------------------- Sample data version 2: wholesale
+// Bulk orders at wholesale prices (Cash on Delivery), placed after the regular ones.
+const QVector<DemoOrder> &bulkOrders()
+{
+    static const QVector<DemoOrder> orders = {
         {40, {{"SPRT-5004", 12}}, OrderStatus::Confirmed, 0},                     // a Sialkot football club
         {31, {{"BEAU-6002", 6}, {"BEAU-6001", 12}}, OrderStatus::Processing, 0}, // a Karachi salon
         {23, {{"BOOK-4002", 10}}, OrderStatus::Pending, 0},                       // a school book club
     };
     return orders;
 }
+
+// ---------------------------------------------------------------- Sample data version 3: qist
+struct DemoPlan
+{
+    const char *name;
+    int months;
+    int markupBp;
+    int minDownBp;
+};
+const DemoPlan kPlans[] = {
+    {"3 months, no markup", 3, 0, 2500},
+    {"6 months", 6, 1000, 2000},
+    {"12 months", 12, 2000, 2000},
+};
+
+// Phones, gadgets, appliances and sports gear: what Pakistani shops sell on qist.
+const char *const kQistSkus[] = {
+    "ELEC-1001", "ELEC-1002", "ELEC-1003", "ELEC-1004", "ELEC-1006",
+    "HOME-3001", "HOME-3003", "HOME-3004", "SPRT-5001", "SPRT-5003",
+};
+
+// Customers the shop allows qist: Ayesha (the account hinted on the sign-in
+// screen, so qist can be tried at checkout) and the five below. None of the
+// five has a khata, so the khata figures in docs/CUSTOMER_ACCOUNTS.md stay the same.
+const int kQistCustomers[] = {0, 6, 14, 21, 30, 33};
+
+struct DemoQist
+{
+    int customer;
+    const char *sku;
+    const char *plan;
+    int daysAgo;               // when the order was placed
+    OrderStatus finalStatus;
+    QVector<int> paidDaysAgo;  // one installment paid on each of these days (the first is the down payment)
+};
+
+const QVector<DemoQist> &sampleQists()
+{
+    static const QVector<DemoQist> qists = {
+        {14, "ELEC-1002", "3 months, no markup", 100, OrderStatus::Delivered, {98, 70, 40, 10}}, // Ali: paid off
+        {6, "HOME-3004", "6 months", 75, OrderStatus::Delivered, {73, 44, 12}},                // Bilal: on time
+        {21, "HOME-3001", "6 months", 70, OrderStatus::Delivered, {68, 38}},                   // Mahnoor: one overdue
+        {30, "SPRT-5001", "12 months", 25, OrderStatus::Delivered, {23}},                      // Junaid: just started
+        {33, "ELEC-1004", "6 months", 0, OrderStatus::Pending, {}},                            // Areeba: down payment due
+    };
+    return qists;
+}
+
+const char *const kPaidBy[] = {"Cash", "Easypaisa", "JazzCash", "Bank transfer"};
+
+// ---------------------------------------------------------------- helpers for seed() and upgrade()
+
+QSqlDatabase dbOf(AppContext &ctx)
+{
+    return QSqlDatabase::database(ctx.connectionName(), false);
+}
+
+QHash<QString, qint64> productIdsBySku(AppContext &ctx)
+{
+    QHash<QString, qint64> ids;
+    QSqlQuery q(dbOf(ctx));
+    if (q.exec(QStringLiteral("SELECT sku, id FROM products"))) {
+        while (q.next())
+            ids.insert(q.value(0).toString(), q.value(1).toLongLong());
+    }
+    return ids;
+}
+
+// A sample customer as a session. Sample data is created inside the app on the
+// admin's behalf, so it never needs the customer's password.
+std::optional<Session> sampleCustomer(AppContext &ctx, const QString &email)
+{
+    QSqlQuery q(dbOf(ctx));
+    q.prepare(QStringLiteral(
+        "SELECT id, full_name, email FROM users WHERE email = :e AND role = 'customer' AND is_active = 1"));
+    q.bindValue(QStringLiteral(":e"), email);
+    if (!q.exec() || !q.next())
+        return std::nullopt;
+    return Session(q.value(0).toLongLong(), q.value(1).toString(), q.value(2).toString(), Role::Customer);
+}
+
+bool hasOrderLine(AppContext &ctx, qint64 userId, const QString &sku, int quantity)
+{
+    QSqlQuery q(dbOf(ctx));
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id = oi.order_id "
+                             "WHERE o.user_id = :u AND oi.sku = :s AND oi.quantity = :n"));
+    q.bindValue(QStringLiteral(":u"), userId);
+    q.bindValue(QStringLiteral(":s"), sku);
+    q.bindValue(QStringLiteral(":n"), quantity);
+    return q.exec() && q.next() && q.value(0).toInt() > 0;
+}
+
+bool hasQist(AppContext &ctx, qint64 userId)
+{
+    QSqlQuery q(dbOf(ctx));
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM qist_accounts WHERE user_id = :u"));
+    q.bindValue(QStringLiteral(":u"), userId);
+    return q.exec() && q.next() && q.value(0).toInt() > 0;
+}
+
+bool cartIsEmpty(AppContext &ctx, const Session &customer)
+{
+    auto count = ctx.cart().itemCount(customer);
+    return count && count.value() == 0;
+}
+
+// Places one sample order the way a customer would (cart, checkout), then the
+// admin moves it to its final status, or the customer cancels it. The order is
+// dated `timeIndex`-th in the sample period. Returns the new order id.
+Result<qint64> placeSampleOrder(AppContext &ctx, const Session &admin, const Session &customer,
+                                const DemoSeeder::SampleAccount &info, const DemoOrder &o, int timeIndex,
+                                const QHash<QString, qint64> &productIds, const QString &paymentMethod)
+{
+    const QDateTime placedAt = sampleTime(o.daysAgo, timeIndex);
+    sql::ScopedFixedClock clock(placedAt);
+    for (const auto &item : o.items) {
+        const qint64 productId = productIds.value(QString::fromLatin1(item.first));
+        if (productId == 0)
+            return Result<qint64>::fail(QStringLiteral("Sample product %1 is missing.").arg(QString::fromLatin1(item.first)));
+        if (auto st = ctx.cart().add(customer, productId, item.second); !st)
+            return st;
+    }
+    CheckoutRequest req;
+    req.checkoutToken = CheckoutService::newCheckoutToken();
+    req.shipping = {info.fullName, info.phone, info.address, info.city};
+    req.paymentMethod = paymentMethod;
+    auto placed = ctx.checkout().placeOrder(customer, req);
+    if (!placed)
+        return placed.status();
+    const qint64 orderId = placed.value().id;
+
+    if (o.finalStatus == OrderStatus::Cancelled) {
+        const QString reason = QString::fromLatin1(kCancelReasons[timeIndex % std::size(kCancelReasons)]);
+        if (auto st = ctx.orders().cancel(customer, orderId, reason); !st)
+            return st;
+    } else {
+        OrderStatus current = OrderStatus::Pending;
+        while (current != o.finalStatus) {
+            const OrderStatus next = *orderstatus::nextForward(current);
+            if (auto st = ctx.orders().advance(admin, orderId, next); !st)
+                return st;
+            current = next;
+        }
+    }
+    if (auto st = backdateOrder(ctx.connectionName(), orderId, placedAt); !st)
+        return st;
+    return orderId;
+}
+
+// Places one sample qist: the order, the admin moving it along, and the
+// installments paid on the days listed (the first one is the down payment;
+// the order is delivered once it is in hand).
+Status placeSampleQist(AppContext &ctx, const Session &admin, const Session &customer,
+                       const DemoSeeder::SampleAccount &info, const DemoQist &d, int timeIndex,
+                       const QHash<QString, qint64> &productIds, qint64 planId)
+{
+    const qint64 productId = productIds.value(QString::fromLatin1(d.sku));
+    if (productId == 0 || planId == 0)
+        return Status::fail(QStringLiteral("Sample qist product or plan %1 is missing.").arg(QString::fromLatin1(d.sku)));
+
+    // A qist bought "today" is placed right now, so its down payment is due today
+    // even when the sample data is loaded just after midnight.
+    const QDateTime placedAt = d.daysAgo == 0 ? QDateTime::currentDateTimeUtc() : sampleTime(d.daysAgo, timeIndex);
+    qint64 orderId = 0;
+    qint64 qistId = 0;
+    {
+        sql::ScopedFixedClock clock(placedAt);
+        if (auto st = ctx.cart().add(customer, productId, 1); !st)
+            return st;
+        CheckoutRequest req;
+        req.checkoutToken = CheckoutService::newCheckoutToken();
+        req.shipping = {info.fullName, info.phone, info.address, info.city};
+        req.paymentMethod = payment::kQist;
+        req.qistPlanId = planId;
+        auto placed = ctx.checkout().placeOrder(customer, req);
+        if (!placed)
+            return placed.status();
+        orderId = placed.value().id;
+        auto created = ctx.qist().forOrder(admin, orderId);
+        if (!created)
+            return created.status();
+        if (!created.value())
+            return Status::fail(QStringLiteral("The sample qist was not created."));
+        qistId = created.value()->id;
+        if (d.finalStatus != OrderStatus::Pending) {
+            for (OrderStatus step : {OrderStatus::Confirmed, OrderStatus::Processing, OrderStatus::Shipped}) {
+                if (auto st = ctx.orders().advance(admin, orderId, step); !st)
+                    return st;
+            }
+        }
+    }
+
+    for (int k = 0; k < d.paidDaysAgo.size(); ++k) {
+        sql::ScopedFixedClock clock(QDateTime::currentDateTimeUtc().addDays(-d.paidDaysAgo[k]).addSecs(-2 * 3600));
+        auto account = ctx.qist().account(admin, qistId);
+        if (!account)
+            return account.status();
+        const std::optional<InstallmentStatus> next = account.value().nextDue();
+        if (!next)
+            break;
+        const QString paidBy = QString::fromLatin1(kPaidBy[(timeIndex + k) % int(std::size(kPaidBy))]);
+        if (auto paid = ctx.qist().recordPayment(admin, qistId, next->remaining(), paidBy); !paid)
+            return paid.status();
+        if (k == 0 && d.finalStatus == OrderStatus::Delivered) {
+            if (auto st = ctx.orders().advance(admin, orderId, OrderStatus::Delivered); !st)
+                return st;
+        }
+    }
+    return backdateOrder(ctx.connectionName(), orderId, placedAt);
+}
+
+// Sample data version 2: wholesale tiers on 6 products and 3 bulk orders that use them.
+// strict = new sample data, where every step must work. Otherwise (bringing older
+// sample data up to date) anything that no longer fits is skipped: a product or
+// customer the shop deleted, tiers the shop already set, an order already there,
+// a sample customer with something in their cart, too little stock.
+Status addWholesale(AppContext &ctx, const Session &admin, bool strict)
+{
+    const QHash<QString, qint64> productIds = productIdsBySku(ctx);
+
+    QHash<QString, QVector<PriceTier>> tiersBySku;
+    for (const DemoTier &t : kTiers) {
+        PriceTier tier;
+        tier.minQuantity = t.minQuantity;
+        tier.discountBp = t.discountBp;
+        tiersBySku[QString::fromLatin1(t.sku)].push_back(tier);
+    }
+    for (auto it = tiersBySku.cbegin(); it != tiersBySku.cend(); ++it) {
+        const qint64 productId = productIds.value(it.key());
+        if (productId == 0) {
+            if (strict)
+                return Status::fail(QStringLiteral("Sample product %1 is missing.").arg(it.key()));
+            continue;
+        }
+        auto existing = ctx.catalog().priceTiers(admin, productId);
+        if (!existing)
+            return existing.status();
+        if (!existing.value().isEmpty())
+            continue; // keep the quantity prices the shop already has
+        if (auto st = ctx.catalog().setPriceTiers(admin, productId, it.value()); !st)
+            return st;
+    }
+
+    const QVector<DemoSeeder::SampleAccount> accounts = DemoSeeder::sampleCustomers();
+    const QVector<DemoOrder> &orders = bulkOrders();
+    for (int i = 0; i < orders.size(); ++i) {
+        const DemoOrder &o = orders[i];
+        const DemoSeeder::SampleAccount &info = accounts[o.customer];
+        const std::optional<Session> customer = sampleCustomer(ctx, info.email);
+        if (!customer) {
+            if (strict)
+                return Status::fail(QStringLiteral("Sample customer %1 is missing.").arg(info.email));
+            continue;
+        }
+        const auto &first = o.items.first();
+        if (hasOrderLine(ctx, customer->userId(), QString::fromLatin1(first.first), first.second))
+            continue; // already placed by an earlier version of the sample data
+        if (!cartIsEmpty(ctx, *customer)) {
+            if (strict)
+                return Status::fail(QStringLiteral("Sample customer %1 has a cart.").arg(info.email));
+            continue; // never touch a cart someone is filling
+        }
+        auto placed = placeSampleOrder(ctx, admin, *customer, info, o, int(sampleOrders().size()) + i, productIds,
+                                       payment::kCashOnDelivery);
+        if (!placed) {
+            if (strict)
+                return placed.status();
+            qWarning().noquote() << "Sample bulk order skipped:" << placed.error();
+            ctx.cart().clear(*customer); // it was empty before
+        }
+    }
+    return Status::ok();
+}
+
+// Sample data version 3: qist plans, products and customers, and 5 qists in
+// every state (paid off, on time, overdue, just started, new). Same rules for
+// `strict` as addWholesale().
+Status addQist(AppContext &ctx, const Session &admin, bool strict)
+{
+    QHash<QString, qint64> planIds; // by lower-case name
+    auto plans = ctx.qist().plans(admin, true);
+    if (!plans)
+        return plans.status();
+    for (const QistPlan &p : plans.value())
+        planIds.insert(p.name.toLower(), p.id);
+    for (const DemoPlan &p : kPlans) {
+        const QString name = QString::fromUtf8(p.name);
+        if (planIds.contains(name.toLower()))
+            continue; // the shop already has a plan with this name
+        auto id = ctx.qist().createPlan(admin, QistPlanInput{name, QistTerms{p.months, p.markupBp, p.minDownBp}});
+        if (!id)
+            return id.status();
+        planIds.insert(name.toLower(), id.value());
+    }
+
+    const QHash<QString, qint64> productIds = productIdsBySku(ctx);
+    for (const char *sku : kQistSkus) {
+        const qint64 productId = productIds.value(QString::fromLatin1(sku));
+        if (productId == 0) {
+            if (strict)
+                return Status::fail(QStringLiteral("Sample product %1 is missing.").arg(QString::fromLatin1(sku)));
+            continue;
+        }
+        if (auto st = ctx.catalog().setQistAllowed(admin, productId, true); !st)
+            return st;
+    }
+
+    const QVector<DemoSeeder::SampleAccount> accounts = DemoSeeder::sampleCustomers();
+    for (int c : kQistCustomers) {
+        const std::optional<Session> customer = sampleCustomer(ctx, accounts[c].email);
+        if (!customer) {
+            if (strict)
+                return Status::fail(QStringLiteral("Sample customer %1 is missing.").arg(accounts[c].email));
+            continue;
+        }
+        if (auto st = ctx.qist().setApproved(admin, customer->userId(), true); !st)
+            return st;
+    }
+
+    const QVector<DemoQist> &qists = sampleQists();
+    for (int i = 0; i < qists.size(); ++i) {
+        const DemoQist &d = qists[i];
+        const DemoSeeder::SampleAccount &info = accounts[d.customer];
+        const std::optional<Session> customer = sampleCustomer(ctx, info.email);
+        if (!customer)
+            continue; // reported above
+        if (hasQist(ctx, customer->userId()))
+            continue; // this customer already has one
+        if (!cartIsEmpty(ctx, *customer)) {
+            if (strict)
+                return Status::fail(QStringLiteral("Sample customer %1 has a cart.").arg(info.email));
+            continue;
+        }
+        const Status st = placeSampleQist(ctx, admin, *customer, info, d, 90 + i, productIds,
+                                          planIds.value(QString::fromUtf8(d.plan).toLower()));
+        if (!st) {
+            if (strict)
+                return st;
+            qWarning().noquote() << "Sample qist skipped:" << st.error();
+            ctx.cart().clear(*customer); // it was empty before
+        }
+    }
+    return Status::ok();
+}
+
+Status setDataVersion(AppContext &ctx, int version)
+{
+    return ctx.settings().set(QStringLiteral("demo_data_version"), QString::number(version));
+}
+
 
 } // namespace
 
@@ -357,7 +715,7 @@ QVector<DemoSeeder::SampleAccount> DemoSeeder::sampleCustomers()
 
 int DemoSeeder::sampleOrderCount()
 {
-    return int(sampleOrders().size());
+    return int(sampleOrders().size() + bulkOrders().size() + sampleQists().size());
 }
 
 int DemoSeeder::sampleKhataCustomerCount()
@@ -373,18 +731,81 @@ int DemoSeeder::sampleWholesaleProductCount()
     return int(skus.size());
 }
 
+int DemoSeeder::sampleQistPlanCount()
+{
+    return int(std::size(kPlans));
+}
+
+int DemoSeeder::sampleQistProductCount()
+{
+    return int(std::size(kQistSkus));
+}
+
+int DemoSeeder::sampleQistCustomerCount()
+{
+    return int(std::size(kQistCustomers));
+}
+
+int DemoSeeder::sampleQistCount()
+{
+    return int(sampleQists().size());
+}
+
 bool DemoSeeder::isLoaded(AppContext &ctx)
 {
     auto v = ctx.settings().get(QStringLiteral("demo_data_loaded"), QStringLiteral("0"));
     return v && v.value() == QLatin1String("1");
 }
 
-Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
+int DemoSeeder::dataVersion(AppContext &ctx)
+{
+    if (!isLoaded(ctx))
+        return 0;
+    // Sample data from before versions were recorded (ShopHub v2 milestone 2 and older) counts as 1.
+    auto v = ctx.settings().get(QStringLiteral("demo_data_version"), QStringLiteral("1"));
+    bool ok = false;
+    const int version = v ? v.value().toInt(&ok) : 1;
+    return ok && version >= 1 ? version : 1;
+}
+
+bool DemoSeeder::needsUpgrade(AppContext &ctx)
+{
+    const int version = dataVersion(ctx);
+    return version > 0 && version < kDataVersion;
+}
+
+Status DemoSeeder::upgrade(AppContext &ctx, const Session &admin)
+{
+    if (!admin.isAdmin())
+        return Status::fail(QStringLiteral("You do not have permission to do this."));
+    const int version = dataVersion(ctx);
+    if (version == 0 || version >= kDataVersion)
+        return Status::ok(); // no sample data (a real shop), or already up to date
+
+    qInfo() << "Updating sample data from version" << version << "to" << kDataVersion;
+    if (version < 2) {
+        if (auto st = addWholesale(ctx, admin, false); !st)
+            return st;
+        if (auto st = setDataVersion(ctx, 2); !st)
+            return st;
+    }
+    if (version < 3) {
+        if (auto st = addQist(ctx, admin, false); !st)
+            return st;
+        if (auto st = setDataVersion(ctx, 3); !st)
+            return st;
+    }
+    qInfo() << "Sample data is now version" << kDataVersion;
+    return Status::ok();
+}
+
+Status DemoSeeder::seed(AppContext &ctx, const Session &admin, int version)
 {
     if (!admin.isAdmin())
         return Status::fail(QStringLiteral("You do not have permission to do this."));
     if (isLoaded(ctx))
         return Status::fail(QStringLiteral("Demo data has already been loaded."));
+    version = qBound(1, version, kDataVersion);
 
     qInfo() << "Loading sample data";
 
@@ -402,14 +823,18 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
 
     const QVector<DemoOrder> &orders = sampleOrders();
 
-    // Stock the demo orders will use up, so final stock matches the table above.
+    // Stock every sample order will use up, so final stock matches the table above.
     QHash<QString, int> consumed;
-    for (const DemoOrder &o : orders) {
-        if (o.finalStatus == OrderStatus::Cancelled)
-            continue;
-        for (const auto &item : o.items)
-            consumed[QString::fromLatin1(item.first)] += item.second;
+    for (const QVector<DemoOrder> *list : {&orders, &bulkOrders()}) {
+        for (const DemoOrder &o : *list) {
+            if (o.finalStatus == OrderStatus::Cancelled)
+                continue;
+            for (const auto &item : o.items)
+                consumed[QString::fromLatin1(item.first)] += item.second;
+        }
     }
+    for (const DemoQist &q : sampleQists())
+        consumed[QString::fromLatin1(q.sku)] += 1;
 
     // Products
     QHash<QString, qint64> productIds;
@@ -428,21 +853,6 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
         if (!id)
             return id.status();
         productIds.insert(in.sku, id.value());
-    }
-
-    // Wholesale prices, saved through the catalog service like an admin would.
-    {
-        QHash<QString, QVector<PriceTier>> tiersBySku;
-        for (const DemoTier &t : kTiers) {
-            PriceTier tier;
-            tier.minQuantity = t.minQuantity;
-            tier.discountBp = t.discountBp;
-            tiersBySku[QString::fromLatin1(t.sku)].push_back(tier);
-        }
-        for (auto it = tiersBySku.cbegin(); it != tiersBySku.cend(); ++it) {
-            if (auto st = ctx.catalog().setPriceTiers(admin, productIds.value(it.key()), it.value()); !st)
-                return st;
-        }
     }
 
     // Sample customers (fast hashing; upgraded to full strength on first sign-in)
@@ -477,7 +887,7 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
                     auto account = ctx.khata().account(admin, userId);
                     if (!account)
                         return account.status();
-                    amount = account.value().balance;
+                    amount = account.value().creditUsed();
                 }
                 if (auto r = ctx.khata().recordPayment(admin, userId, amount, QString::fromLatin1(e.note)); !r)
                     return r.status();
@@ -491,48 +901,35 @@ Status DemoSeeder::seed(AppContext &ctx, const Session &admin)
 
     for (int i = 0; i < orders.size(); ++i) {
         const DemoOrder &o = orders[i];
-        const Session &customer = customers[o.customer];
-        const SampleAccount &info = accounts[o.customer];
         if (auto st = runKhataEventsBefore(o.daysAgo); !st)
             return st;
-        const QDateTime placedAt = sampleTime(o.daysAgo, i);
-        sql::ScopedFixedClock clock(placedAt);
-        for (const auto &item : o.items) {
-            if (auto st = ctx.cart().add(customer, productIds.value(QString::fromLatin1(item.first)), item.second); !st)
-                return st;
-        }
-        CheckoutRequest req;
-        req.checkoutToken = CheckoutService::newCheckoutToken();
-        req.shipping = {info.fullName, info.phone, info.address, info.city};
-        req.paymentMethod = khataOrders.contains(i) ? payment::kKhata : payment::kCashOnDelivery;
-        auto placed = ctx.checkout().placeOrder(customer, req);
+        auto placed = placeSampleOrder(ctx, admin, customers[o.customer], accounts[o.customer], o, i, productIds,
+                                       khataOrders.contains(i) ? payment::kKhata : payment::kCashOnDelivery);
         if (!placed)
             return placed.status();
-        const qint64 orderId = placed.value().id;
-
-        if (o.finalStatus == OrderStatus::Cancelled) {
-            const QString reason = QString::fromLatin1(kCancelReasons[i % std::size(kCancelReasons)]);
-            if (auto st = ctx.orders().cancel(customer, orderId, reason); !st)
-                return st;
-        } else {
-            OrderStatus current = OrderStatus::Pending;
-            while (current != o.finalStatus) {
-                const OrderStatus next = *orderstatus::nextForward(current);
-                if (auto st = ctx.orders().advance(admin, orderId, next); !st)
-                    return st;
-                current = next;
-            }
-        }
-        if (auto st = backdateOrder(ctx.connectionName(), orderId, placedAt); !st)
-            return st;
     }
-
     if (auto st = runKhataEventsBefore(-1); !st)
         return st;
 
     if (auto st = ctx.settings().set(QStringLiteral("demo_data_loaded"), QStringLiteral("1")); !st)
         return st;
-    qInfo() << "Sample data loaded:" << customers.size() << "customers," << orders.size() << "orders";
+    if (auto st = setDataVersion(ctx, 1); !st)
+        return st;
+
+    // Later versions of the sample data, the same steps upgrade() runs on older databases.
+    if (version >= 2) {
+        if (auto st = addWholesale(ctx, admin, true); !st)
+            return st;
+        if (auto st = setDataVersion(ctx, 2); !st)
+            return st;
+    }
+    if (version >= 3) {
+        if (auto st = addQist(ctx, admin, true); !st)
+            return st;
+        if (auto st = setDataVersion(ctx, 3); !st)
+            return st;
+    }
+    qInfo() << "Sample data loaded:" << customers.size() << "customers," << sampleOrderCount() << "orders";
     return Status::ok();
 }
 

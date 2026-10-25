@@ -5,6 +5,8 @@
 #include "database/Transaction.h"
 #include "services/Access.h"
 #include "services/CartService.h"
+#include "services/KhataService.h"
+#include "services/QistService.h"
 
 #include <QDate>
 #include <QRandomGenerator>
@@ -65,8 +67,9 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
     if (req.checkoutToken.trimmed().isEmpty())
         return Result<Order>::fail(QStringLiteral("Checkout session expired. Please open checkout again."));
     const bool onKhata = req.paymentMethod == payment::kKhata;
-    if (req.paymentMethod != payment::kCashOnDelivery && !onKhata)
-        return Result<Order>::fail(QStringLiteral("Please choose Cash on Delivery or Khata."));
+    const bool onQist = req.paymentMethod == payment::kQist;
+    if (req.paymentMethod != payment::kCashOnDelivery && !onKhata && !onQist)
+        return Result<Order>::fail(QStringLiteral("Please choose Cash on Delivery, Khata or Qist."));
 
     ShippingDetails ship = req.shipping;
     ship.fullName = ship.fullName.trimmed();
@@ -117,7 +120,7 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
     order.tax = price.tax;
     order.total = price.total;
     order.paymentMethod = req.paymentMethod;
-    order.paymentStatus = onKhata ? payment::kOnAccount : payment::kUnpaid;
+    order.paymentStatus = (onKhata || onQist) ? payment::kOnAccount : payment::kUnpaid;
 
     // 3b. Khata: check the credit limit here, inside the transaction, so two
     //     orders can never both squeeze under the limit.
@@ -129,13 +132,55 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
             return Result<Order>::fail(QStringLiteral(
                 "Khata is not open for your account. Please choose Cash on Delivery or ask the shop to give you a credit limit."));
         const KhataAccount &k = *account.value();
-        if (k.balance + price.total > k.creditLimit)
+        if (k.creditUsed() + price.total > k.creditLimit)
             return Result<Order>::fail(
                 QStringLiteral("This order (%1) is more than your available khata credit (%2). "
                                "Your limit is %3 and you owe %4. Please choose Cash on Delivery, "
                                "or pay some of your khata first.")
                     .arg(price.total.toString(), k.available().toString(), k.creditLimit.toString(),
-                         k.balance.toString()));
+                         k.creditUsed().toString()));
+    }
+
+    // 3c. Qist: who may buy, what may be bought, and the schedule, all checked
+    //     here inside the transaction (docs/QIST.md).
+    std::optional<QistPlan> qistPlan;
+    std::optional<QistQuote> qistQuote;
+    if (onQist) {
+        auto approved = m_repos.qist.isApproved(session.userId());
+        if (!approved)
+            return approved.status();
+        if (!approved.value())
+            return Result<Order>::fail(QStringLiteral(
+                "Qist is not open for your account. Please choose another payment method, or ask the shop to allow qist."));
+        QStringList notAllowed;
+        for (const CartItem &c : items) {
+            if (!c.qistAllowed)
+                notAllowed << c.name;
+        }
+        if (!notAllowed.isEmpty())
+            return Result<Order>::fail(QStringLiteral("These items cannot be bought on qist: %1. Remove them from "
+                                                      "your cart or choose another payment method.")
+                                           .arg(notAllowed.join(QStringLiteral(", "))));
+        const QDate today = QistService::today();
+        auto overdue = QistService::overdueFor(m_repos, session.userId(), today);
+        if (!overdue)
+            return overdue.status();
+        if (overdue.value() > Money())
+            return Result<Order>::fail(QStringLiteral("You have qist installments overdue (%1). Please pay them "
+                                                      "before starting a new qist.")
+                                           .arg(overdue.value().toString()));
+        auto plan = m_repos.qist.plan(req.qistPlanId);
+        if (!plan)
+            return plan.status();
+        if (!plan.value() || !plan.value()->active)
+            return Result<Order>::fail(QStringLiteral("Please choose a qist plan."));
+        auto quoted = qist::quote(plan.value()->terms, price.total, req.qistDownPayment, today);
+        if (!quoted)
+            return quoted.status();
+        if (quoted.value().qistPrice > Money::fromRupees(KhataService::kMaxEntryRupees))
+            return Result<Order>::fail(QStringLiteral("This order is too large to buy on qist."));
+        qistPlan = *plan.value();
+        qistQuote = quoted.value();
     }
     order.shipName = ship.fullName;
     order.shipPhone = ship.phone;
@@ -187,6 +232,31 @@ Result<Order> CheckoutService::placeOrder(const Session &session, const Checkout
         if (!after)
             return after.status();
         if (auto st = injectFault(QStringLiteral("after_khata_charge")); !st)
+            return st;
+    }
+
+    // 5c. Qist: the qist with its schedule, and the qist price on the khata ledger.
+    if (onQist) {
+        QistAccount account;
+        account.orderId = orderId.value();
+        account.userId = session.userId();
+        account.planName = qistPlan->name;
+        account.terms = qistQuote->terms;
+        account.cashPrice = qistQuote->cashPrice;
+        account.markup = qistQuote->markup;
+        account.qistPrice = qistQuote->qistPrice;
+        account.downPayment = qistQuote->downPayment;
+        auto qistId = m_repos.qist.insertAccount(account, qistPlan->id);
+        if (!qistId)
+            return qistId.status();
+        if (auto st = m_repos.qist.insertSchedule(qistId.value(), qistQuote->schedule); !st)
+            return st;
+        auto after = m_repos.khata.append(session.userId(), KhataKind::Charge, qistQuote->qistPrice, orderId.value(),
+                                          QStringLiteral("Qist: %1").arg(qistPlan->name), session.userId(),
+                                          QDateTime(), qistId.value());
+        if (!after)
+            return after.status();
+        if (auto st = injectFault(QStringLiteral("after_qist_created")); !st)
             return st;
     }
 

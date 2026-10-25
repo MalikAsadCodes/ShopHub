@@ -13,6 +13,8 @@ namespace shophub {
 // - Cancelling a khata order adds a reversal (OrderService).
 // - The admin records payments and adjustments here.
 // Entries are never changed or deleted; mistakes are fixed with an adjustment.
+// Qist entries share the ledger (docs/QIST.md) but never count against the
+// credit limit: KhataAccount::creditUsed() is the khata part only.
 class KhataService
 {
 public:
@@ -33,7 +35,8 @@ public:
 
     Status setLimit(const Session &session, qint64 customerId, Money limit);
 
-    // Money received from the customer. Cannot be more than what they owe.
+    // Money received from the customer. Cannot be more than what they owe on
+    // khata; qist installments are recorded with QistService::recordPayment.
     // note = how it was paid, e.g. "Cash", "Easypaisa". Returns the new balance.
     Result<Money> recordPayment(const Session &session, qint64 customerId, Money amount, const QString &note);
 

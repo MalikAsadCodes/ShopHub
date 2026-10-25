@@ -105,11 +105,16 @@ Result<Money> KhataService::recordPayment(const Session &session, qint64 custome
     auto customer = loadCustomer(customerId);
     if (!customer)
         return customer.status();
-    const Money owed = customer.value().balance;
-    if (owed <= Money())
+    // Only the khata part: qist installments are recorded on their qist (QistService).
+    const Money owed = customer.value().creditUsed();
+    if (owed <= Money()) {
+        if (customer.value().qistBalance > Money())
+            return Result<Money>::fail(QStringLiteral("%1 owes nothing on khata. Record qist installments on the Qist page.")
+                                           .arg(customer.value().customerName));
         return Result<Money>::fail(QStringLiteral("%1 does not owe anything.").arg(customer.value().customerName));
+    }
     if (amount > owed)
-        return Result<Money>::fail(QStringLiteral("%1 owes only %2. The payment cannot be more than that.")
+        return Result<Money>::fail(QStringLiteral("%1 owes only %2 on khata. The payment cannot be more than that.")
                                        .arg(customer.value().customerName, owed.toString()));
 
     auto after = m_repos.khata.append(customerId, KhataKind::Payment, Money() - amount, 0, note.trimmed(),
@@ -147,11 +152,13 @@ Result<Money> KhataService::adjust(const Session &session, qint64 customerId, Mo
     auto customer = loadCustomer(customerId);
     if (!customer)
         return customer.status();
-    if (signedAmount.isNegative() && customer.value().balance <= Money())
-        return Result<Money>::fail(QStringLiteral("%1 does not owe anything.").arg(customer.value().customerName));
-    if (signedAmount.isNegative() && size > customer.value().balance)
-        return Result<Money>::fail(QStringLiteral("%1 owes only %2. You cannot reduce the balance below zero.")
-                                       .arg(customer.value().customerName, customer.value().balance.toString()));
+    // A khata adjustment never touches what is owed on qist.
+    const Money owed = customer.value().creditUsed();
+    if (signedAmount.isNegative() && owed <= Money())
+        return Result<Money>::fail(QStringLiteral("%1 does not owe anything on khata.").arg(customer.value().customerName));
+    if (signedAmount.isNegative() && size > owed)
+        return Result<Money>::fail(QStringLiteral("%1 owes only %2 on khata. You cannot reduce the balance below zero.")
+                                       .arg(customer.value().customerName, owed.toString()));
 
     auto after = m_repos.khata.append(customerId, KhataKind::Adjustment, signedAmount, 0, note.trimmed(),
                                       session.userId());

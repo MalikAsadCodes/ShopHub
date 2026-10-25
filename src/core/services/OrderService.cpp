@@ -73,8 +73,20 @@ Status OrderService::advance(const Session &session, qint64 orderId, OrderStatus
         return Status::fail(QStringLiteral("An order cannot go from %1 to %2.")
                                 .arg(orderstatus::displayName(from), orderstatus::displayName(to)));
 
+    // Qist: the shop hands over the goods once the down payment is in hand.
+    if (order.value().paymentMethod == payment::kQist && to == OrderStatus::Delivered) {
+        auto found = m_repos.qist.findByOrder(orderId);
+        if (!found)
+            return found.status();
+        if (found.value() && found.value()->state == QistState::Active && !found.value()->downPaymentPaid())
+            return Status::fail(QStringLiteral("Collect the down payment (%1) and record it on the Qist page before "
+                                               "marking this order delivered.")
+                                    .arg((found.value()->downPayment - found.value()->paid).toString()));
+    }
+
     // Cash on Delivery is paid when delivered. A khata order stays "on khata":
-    // the customer pays the khata later, not the single order.
+    // the customer pays the khata later, not the single order. A qist order is
+    // paid when its last installment is (QistService::recordPayment).
     const bool cod = order.value().paymentMethod == payment::kCashOnDelivery;
     const QString paymentStatus = (to == OrderStatus::Delivered && cod) ? payment::kPaid : order.value().paymentStatus;
     if (auto st = m_repos.orders.updateStatus(orderId, to, paymentStatus); !st)
@@ -139,6 +151,31 @@ Status OrderService::cancel(const Session &session, qint64 orderId, const QStrin
                                               o.orderNumber, session.userId());
             if (!after)
                 return after.status();
+        }
+    }
+
+    // A qist comes off the khata too, and any money already paid on it is
+    // returned to the customer, so the qist part of the ledger ends at zero.
+    if (o.paymentMethod == payment::kQist) {
+        auto found = m_repos.qist.findByOrder(orderId);
+        if (!found)
+            return found.status();
+        if (found.value() && found.value()->state != QistState::Cancelled) {
+            const QistAccount &q = *found.value();
+            auto reversed = m_repos.khata.append(o.userId, KhataKind::Reversal, Money() - q.qistPrice, orderId,
+                                                 o.orderNumber, session.userId(), QDateTime(), q.id);
+            if (!reversed)
+                return reversed.status();
+            if (q.paid > Money()) {
+                auto returned = m_repos.khata.append(o.userId, KhataKind::Adjustment, q.paid, orderId,
+                                                     QStringLiteral("Qist cancelled: %1 returned to the customer")
+                                                         .arg(q.paid.toString()),
+                                                     session.userId(), QDateTime(), q.id);
+                if (!returned)
+                    return returned.status();
+            }
+            if (auto st = m_repos.qist.setState(q.id, QistState::Cancelled); !st)
+                return st;
         }
     }
 

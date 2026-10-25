@@ -26,6 +26,8 @@ public:
     Result<qint64> createProduct(const Session &session, ProductInput input);
     Status updateProduct(const Session &session, qint64 productId, ProductInput input);
     Status setProductActive(const Session &session, qint64 productId, bool active);
+    // Whether the product may be bought on qist (installments). Also part of ProductInput.
+    Status setQistAllowed(const Session &session, qint64 productId, bool allowed);
     Result<QString> importImage(const Session &session, const QString &sourcePath);
 
     // ---- wholesale (quantity) prices, see docs/WHOLESALE.md

@@ -195,6 +195,16 @@ Status OrderRepository::updateStatus(qint64 id, OrderStatus status, const QStrin
     return sql::exec(q, "OrderRepository::updateStatus");
 }
 
+Status OrderRepository::setPaymentStatus(qint64 id, const QString &paymentStatus)
+{
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("UPDATE orders SET payment_status = :p, updated_at = :u WHERE id = :id"));
+    q.bindValue(QStringLiteral(":p"), paymentStatus);
+    q.bindValue(QStringLiteral(":u"), sql::nowUtc());
+    q.bindValue(QStringLiteral(":id"), id);
+    return sql::exec(q, "OrderRepository::setPaymentStatus");
+}
+
 Status OrderRepository::addHistory(qint64 orderId, std::optional<OrderStatus> from, OrderStatus to,
                                    qint64 changedBy, const QString &note)
 {

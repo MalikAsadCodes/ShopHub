@@ -34,6 +34,7 @@ Result<std::unique_ptr<AppContext>> AppContext::create(const AppConfig &config)
     ctx->m_inventory = std::make_unique<InventoryService>(r);
     ctx->m_dashboard = std::make_unique<DashboardService>(r);
     ctx->m_khata = std::make_unique<KhataService>(r);
+    ctx->m_qist = std::make_unique<QistService>(r);
 
     qInfo() << "ShopHub back end ready, schema version" << migrator.currentVersion();
     return Result<std::unique_ptr<AppContext>>(std::move(ctx));

@@ -10,6 +10,7 @@ add_library(shophub_core STATIC
     domain/OrderStatus.h         domain/OrderStatus.cpp
     domain/Session.h
     domain/PriceTier.h
+    domain/Qist.h
 
     database/Database.h          database/Database.cpp
     database/Transaction.h       database/Transaction.cpp
@@ -25,6 +26,7 @@ add_library(shophub_core STATIC
     repositories/OrderRepository.h      repositories/OrderRepository.cpp
     repositories/MiscRepositories.h     repositories/MiscRepositories.cpp
     repositories/KhataRepository.h      repositories/KhataRepository.cpp
+    repositories/QistRepository.h       repositories/QistRepository.cpp
 
     security/PasswordHasher.h    security/PasswordHasher.cpp
 
@@ -38,6 +40,7 @@ add_library(shophub_core STATIC
     services/OrderService.h      services/OrderService.cpp
     services/InventoryService.h  services/InventoryService.cpp
     services/KhataService.h      services/KhataService.cpp
+    services/QistService.h       services/QistService.cpp
     services/DashboardService.h  services/DashboardService.cpp
     services/AppContext.h        services/AppContext.cpp
     services/DemoSeeder.h        services/DemoSeeder.cpp

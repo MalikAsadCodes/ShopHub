@@ -58,6 +58,8 @@ QString methodDisplay(const QString &method)
 {
     if (method == kKhata)
         return QStringLiteral("Khata");
+    if (method == kQist)
+        return QStringLiteral("Qist (installments)");
     return QStringLiteral("Cash on Delivery");
 }
 
@@ -101,6 +103,25 @@ QString khataKindDisplay(KhataKind k)
     case KhataKind::Adjustment: return QStringLiteral("Adjustment");
     }
     return QString();
+}
+
+QString qistStateToDb(QistState s)
+{
+    switch (s) {
+    case QistState::Active: return QStringLiteral("active");
+    case QistState::Completed: return QStringLiteral("completed");
+    case QistState::Cancelled: return QStringLiteral("cancelled");
+    }
+    return QStringLiteral("active");
+}
+
+std::optional<QistState> qistStateFromDb(const QString &s)
+{
+    for (QistState state : {QistState::Active, QistState::Completed, QistState::Cancelled}) {
+        if (qistStateToDb(state) == s)
+            return state;
+    }
+    return std::nullopt;
 }
 
 } // namespace shophub

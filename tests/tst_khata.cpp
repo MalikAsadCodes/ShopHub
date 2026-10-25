@@ -487,16 +487,22 @@ private slots:
                           .arg(sql::toDb(QDateTime::currentDateTimeUtc().addDays(-7)))) > 5);
 
         // Running balances add up, nobody is over their limit, nobody is below zero.
+        // The sample qists share the ledger but not the khata figures (docs/QIST.md).
         auto accounts = m_b->ctx->khata().accounts(admin.value()).value();
         QCOMPARE(accounts.size(), 50);
         Money owed;
+        Money onQist;
         for (const KhataAccount &a : accounts) {
             verifyLedger(a.userId);
             QVERIFY2(!a.overLimit(), qPrintable(a.customerName));
             QVERIFY(!a.balance.isNegative());
-            owed += a.balance;
+            QVERIFY(!a.qistBalance.isNegative());
+            owed += a.creditUsed();
+            onQist += a.qistBalance;
         }
         QCOMPARE(owed, Money::fromRupees(87899));
+        QVERIFY(onQist > Money());
+        QCOMPARE(m_b->ctx->dashboard().stats(admin.value()).value().qistOutstanding, onQist);
         QCOMPARE(m_b->ctx->dashboard().stats(admin.value()).value().khataOutstanding, owed);
         QCOMPARE(m_b->ctx->dashboard().stats(admin.value()).value().khataDebtors, 7);
 

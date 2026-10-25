@@ -6,6 +6,7 @@
 #include "repositories/MiscRepositories.h"
 #include "repositories/OrderRepository.h"
 #include "repositories/ProductRepository.h"
+#include "repositories/QistRepository.h"
 #include "repositories/UserRepository.h"
 
 namespace shophub {
@@ -23,7 +24,8 @@ struct Repositories
           addresses(connectionName),
           audit(connectionName),
           settings(connectionName),
-          khata(connectionName)
+          khata(connectionName),
+          qist(connectionName)
     {}
 
     QString connection; // used by services to open transactions
@@ -36,6 +38,7 @@ struct Repositories
     AuditRepository audit;
     SettingsRepository settings;
     KhataRepository khata;
+    QistRepository qist;
 };
 
 } // namespace shophub

@@ -371,6 +371,167 @@ private slots:
         QCOMPARE(loaded.value().at(0).discountBp, 500);
     }
 
+    // ------------------------------------------------------------------ qist (migration 5)
+    void qistTablesKeepTheirPromises()
+    {
+        QSqlQuery q(QSqlDatabase::database(m_b->ctx->connectionName(), false));
+        const qint64 me = m_b->customer.userId();
+        auto run = [&q](const QString &sql) { return q.exec(sql); };
+
+        // An order may now be paid by qist, but not by anything else.
+        const QString order = QStringLiteral(
+            "INSERT INTO orders (id, order_number, user_id, status, subtotal_paisa, shipping_paisa, tax_paisa, "
+            " total_paisa, payment_method, payment_status, ship_name, ship_phone, ship_line1, ship_city, "
+            " checkout_token, created_at, updated_at) VALUES (%1, 'N%1', %2, 'pending', 2199900, 0, 0, 2199900, "
+            " '%3', 'on_account', 'a', 'b', 'c', 'd', 'tok%1', 'x', 'x')");
+        QVERIFY(run(order.arg(1).arg(me).arg(QStringLiteral("qist"))));
+        QVERIFY(!run(order.arg(2).arg(me).arg(QStringLiteral("card"))));
+
+        // Plans: the same ranges as qist::validateTerms.
+        const QString plan = QStringLiteral("INSERT INTO qist_plans (name, months, markup_bp, min_down_bp, created_at, "
+                                            "updated_at) VALUES ('%1', %2, %3, %4, 'x', 'x')");
+        QVERIFY(run(plan.arg(QStringLiteral("6 months")).arg(6).arg(1000).arg(2000)));
+        QVERIFY(!run(plan.arg(QStringLiteral("6 MONTHS")).arg(6).arg(0).arg(0))); // names are unique, any case
+        QVERIFY(!run(plan.arg(QStringLiteral("a")).arg(1).arg(0).arg(0)));
+        QVERIFY(!run(plan.arg(QStringLiteral("b")).arg(25).arg(0).arg(0)));
+        QVERIFY(!run(plan.arg(QStringLiteral("c")).arg(6).arg(5001).arg(0)));
+        QVERIFY(!run(plan.arg(QStringLiteral("d")).arg(6).arg(0).arg(9001)));
+
+        // A qist: the price must add up and the down payment must be less than it.
+        const QString account = QStringLiteral(
+            "INSERT INTO qist_accounts (order_id, user_id, plan_id, plan_name, months, markup_bp, min_down_bp, "
+            " cash_price_paisa, markup_paisa, qist_price_paisa, down_payment_paisa, created_at, updated_at) "
+            "VALUES (1, %1, 1, '6 months', 6, 1000, 2000, 2199900, 219990, %2, %3, 'x', 'x')");
+        QVERIFY(!run(account.arg(me).arg(2419891).arg(484000)));
+        QVERIFY(!run(account.arg(me).arg(2419890).arg(2419890)));
+        QVERIFY(run(account.arg(me).arg(2419890).arg(484000)));
+        QVERIFY(!run(account.arg(me).arg(2419890).arg(484000))); // one qist per order
+        QCOMPARE(m_b->scalar(QStringLiteral("SELECT status FROM qist_accounts")).toString(), QStringLiteral("active"));
+
+        // The schedule and the terms never change; a qist is never deleted.
+        QVERIFY(run(QStringLiteral("INSERT INTO qist_installments VALUES (1, 0, '2026-10-24', 484000)")));
+        QVERIFY(!run(QStringLiteral("INSERT INTO qist_installments VALUES (1, 0, '2026-10-24', 484000)")));
+        QVERIFY(!run(QStringLiteral("INSERT INTO qist_installments VALUES (1, 1, '2026-11-24', 0)")));
+        QVERIFY(!run(QStringLiteral("INSERT INTO qist_installments VALUES (99, 1, '2026-11-24', 100)")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_installments SET amount_paisa = 1")));
+        QVERIFY(!run(QStringLiteral("DELETE FROM qist_installments")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_accounts SET down_payment_paisa = 0")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_accounts SET created_at = 'y'")));
+        QVERIFY(!run(QStringLiteral("DELETE FROM qist_accounts")));
+
+        // Status: completed never reopens; cancelled is final.
+        QVERIFY(run(QStringLiteral("UPDATE qist_accounts SET status = 'completed', updated_at = 'y'")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_accounts SET status = 'active'")));
+        QVERIFY(run(QStringLiteral("UPDATE qist_accounts SET status = 'cancelled'")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_accounts SET status = 'active'")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_accounts SET status = 'completed'")));
+        QVERIFY(!run(QStringLiteral("UPDATE qist_accounts SET status = 'overdue'")));
+
+        // Ledger entries can point at a qist, but only one that exists.
+        QVERIFY(run(QStringLiteral("INSERT INTO khata_entries (user_id, kind, amount_paisa, balance_after_paisa, "
+                                   "order_id, created_at, qist_id) VALUES (%1, 'charge', 2419890, 2419890, 1, 'x', 1)")
+                        .arg(me)));
+        QVERIFY(!run(QStringLiteral("INSERT INTO khata_entries (user_id, kind, amount_paisa, balance_after_paisa, "
+                                    "created_at, qist_id) VALUES (%1, 'payment', -5, 5, 'x', 77)")
+                         .arg(me)));
+    }
+
+    // ------------------------------------------------------------------ upgrading a v4 database
+    void upgradesAVersion4Database()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath(QStringLiteral("v4.db"));
+        {
+            // A database as ShopHub v2 milestone 2 left it (migrations 1-4), with a khata order.
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("v4"));
+            db.setDatabaseName(path);
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY(q.exec(QStringLiteral("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, "
+                                          "applied_at TEXT NOT NULL)")));
+            for (int i = 0; i < 4; ++i) {
+                const Migration &m = Migrator::migrations().at(i);
+                for (const QString &statement : m.statements)
+                    QVERIFY2(q.exec(statement), qPrintable(q.lastError().text()));
+                QVERIFY(q.exec(QStringLiteral("INSERT INTO schema_migrations VALUES (%1, '%2', '2026-10-23T00:00:00Z')")
+                                   .arg(m.version)
+                                   .arg(m.name)));
+            }
+            const QStringList rows = {
+                "INSERT INTO users (id, email, full_name, password_hash, role, created_at, updated_at) VALUES "
+                "(7, 'ali@example.com', 'Ali Raza', 'x', 'customer', 'n', 'n')",
+                "INSERT INTO categories (id, name, created_at) VALUES (1, 'Phones', 'n')",
+                "INSERT INTO products (id, sku, name, category_id, price_paisa, stock, created_at, updated_at) VALUES "
+                "(3, 'PH-1', 'Phone', 1, 6000000, 4, 'n', 'n')",
+                "INSERT INTO product_price_tiers VALUES (3, 12, 500)",
+                "INSERT INTO orders (id, order_number, user_id, status, subtotal_paisa, shipping_paisa, tax_paisa, "
+                "total_paisa, payment_method, payment_status, ship_name, ship_phone, ship_line1, ship_city, "
+                "checkout_token, created_at, updated_at) VALUES (11, 'SH-20261020-AAAAAA', 7, 'delivered', 6000000, "
+                "0, 0, 6000000, 'khata', 'on_account', 'Ali', '0300 1234567', 'Street 1', 'Lahore', 'tok', "
+                "'2026-10-20T09:00:00Z', 'n')",
+                "INSERT INTO order_items (order_id, product_id, sku, product_name, unit_price_paisa, quantity, "
+                "line_total_paisa) VALUES (11, 3, 'PH-1', 'Phone', 6000000, 1, 6000000)",
+                "INSERT INTO khata_accounts (user_id, credit_limit_paisa, created_at, updated_at) VALUES (7, 10000000, 'n', 'n')",
+                "INSERT INTO khata_entries (user_id, kind, amount_paisa, balance_after_paisa, order_id, created_at) "
+                "VALUES (7, 'charge', 6000000, 6000000, 11, '2026-10-20T09:00:00Z')",
+            };
+            for (const QString &row : rows)
+                QVERIFY2(q.exec(row), qPrintable(q.lastError().text()));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("v4"));
+
+        AppConfig cfg;
+        cfg.databasePath = path;
+        cfg.imageDirectory = dir.filePath(QStringLiteral("images"));
+        cfg.passwordIterations = 1000;
+        auto created = AppContext::create(cfg);
+        QVERIFY2(created.isOk(), qPrintable(created.error()));
+        auto ctx = created.takeValue();
+        QSqlQuery q(QSqlDatabase::database(ctx->connectionName(), false));
+        auto scalar = [&q](const QString &sql) {
+            return q.exec(sql) && q.next() ? q.value(0) : QVariant();
+        };
+
+        QCOMPARE(scalar(QStringLiteral("SELECT MAX(version) FROM schema_migrations")).toInt(), Migrator::latestVersion());
+        QCOMPARE(scalar(QStringLiteral("SELECT name FROM schema_migrations WHERE version = 5")).toString(),
+                 QStringLiteral("qist_installments"));
+        QCOMPARE(scalar(QStringLiteral("PRAGMA foreign_keys")).toInt(), 1);
+        QVERIFY(q.exec(QStringLiteral("PRAGMA foreign_key_check")));
+        QVERIFY(!q.next());
+        QVERIFY(q.exec(QStringLiteral("PRAGMA integrity_check")) && q.next());
+        QCOMPARE(q.value(0).toString(), QStringLiteral("ok"));
+
+        // Everything that was there survived: the order (same id), its line, the ledger, the tiers.
+        QCOMPARE(scalar(QStringLiteral("SELECT order_number FROM orders WHERE id = 11")).toString(),
+                 QStringLiteral("SH-20261020-AAAAAA"));
+        QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM order_items WHERE order_id = 11")).toInt(), 1);
+        QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM khata_entries WHERE order_id = 11 AND qist_id IS NULL")).toInt(), 1);
+        QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM product_price_tiers")).toInt(), 1);
+        QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'orders' "
+                                       "AND name LIKE 'idx_orders_%'")).toInt(), 3);
+        QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name = 'orders_new'")).toInt(), 0);
+        // New columns start switched off.
+        QCOMPARE(scalar(QStringLiteral("SELECT qist_allowed FROM products WHERE id = 3")).toInt(), 0);
+        QCOMPARE(scalar(QStringLiteral("SELECT qist_approved FROM khata_accounts WHERE user_id = 7")).toInt(), 0);
+        // The ledger and the order lines still point at the rebuilt orders table.
+        QVERIFY(!q.exec(QStringLiteral("INSERT INTO khata_entries (user_id, kind, amount_paisa, balance_after_paisa, "
+                                       "order_id, created_at) VALUES (7, 'charge', 5, 5, 999, 'x')")));
+        QVERIFY(!q.exec(QStringLiteral("UPDATE order_items SET quantity = 5 WHERE order_id = 11")));
+
+        // The old khata order still counts against the limit, and qist works on the upgraded database.
+        auto admin = ctx->auth().createFirstAdmin(QStringLiteral("Owner"), QStringLiteral("owner@test.pk"),
+                                                  QStringLiteral("OwnerPass1"));
+        QVERIFY(admin.isOk());
+        const KhataAccount ali = ctx->khata().account(admin.value(), 7).value();
+        QCOMPARE(ali.creditUsed(), Money::fromRupees(60000));
+        QCOMPARE(ali.qistBalance, Money());
+        QVERIFY(ctx->qist().setApproved(admin.value(), 7, true).isOk());
+        QVERIFY(ctx->catalog().setQistAllowed(admin.value(), 3, true).isOk());
+        QVERIFY(ctx->qist().createPlan(admin.value(), QistPlanInput{QStringLiteral("6 months"), QistTerms{6, 1000, 2000}}).isOk());
+    }
+
 private:
     // Raw insert, to test the table's own rules without the repository.
     bool insertTier(qint64 productId, int minQuantity, int discountBp)

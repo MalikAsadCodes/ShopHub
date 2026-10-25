@@ -44,6 +44,12 @@ QString nowUtc()
     return g_fixedNow.isEmpty() ? toDb(QDateTime::currentDateTimeUtc()) : g_fixedNow;
 }
 
+QDate todayLocal()
+{
+    // Follows ScopedFixedClock too, so backdated sample qists get realistic due dates.
+    return fromDb(nowUtc()).toLocalTime().date();
+}
+
 ScopedFixedClock::ScopedFixedClock(const QDateTime &utc)
     : m_previous(g_fixedNow)
 {

@@ -24,8 +24,12 @@ struct CheckoutRequest
     // creating a duplicate.
     QString checkoutToken;
     ShippingDetails shipping;
-    QString paymentMethod = QStringLiteral("cod"); // "cod" or "khata" (needs a credit limit)
+    QString paymentMethod = QStringLiteral("cod"); // "cod", "khata" (needs a credit limit) or "qist"
     bool saveAsDefaultAddress = true;
+
+    // Qist only (docs/QIST.md): the plan, and the down payment (empty = the plan's minimum).
+    qint64 qistPlanId = 0;
+    std::optional<Money> qistDownPayment;
 };
 
 class CheckoutService
@@ -40,8 +44,9 @@ public:
     Result<std::optional<Address>> savedAddress(const Session &session) const;
 
     // Validates the cart and places the order in ONE database transaction:
-    // order + lines + stock deduction + stock movements + cart clearing.
-    // Either everything is saved or nothing is.
+    // order + lines + stock deduction + stock movements + cart clearing
+    // (+ the khata entry, + the qist and its schedule). Either everything is
+    // saved or nothing is.
     Result<Order> placeOrder(const Session &session, const CheckoutRequest &request);
 
     // Tests only: lets a test force a failure at a named stage to prove rollback.

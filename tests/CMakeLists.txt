@@ -41,6 +41,7 @@ shophub_add_test(tst_orders_inventory)
 # Lets the sample-data test compare the app's accounts with docs/customer_accounts.csv.
 target_compile_definitions(tst_orders_inventory PRIVATE SHOPHUB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 shophub_add_test(tst_khata)
+shophub_add_test(tst_qist)
 
 # GUI journeys (sign in, shop, checkout, admin pages).
 # tst_gui picks Qt's invisible "offscreen" display when it can load it, and the normal

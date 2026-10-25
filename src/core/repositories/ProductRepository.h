@@ -19,6 +19,7 @@ public:
     Result<qint64> insert(const ProductInput &input, int initialStock);
     Status update(qint64 id, const ProductInput &input);
     Status setActive(qint64 id, bool active);
+    Status setQistAllowed(qint64 id, bool allowed);
     Result<bool> skuExists(const QString &sku, qint64 excludeId) const;
     Result<QStringList> brands() const;
     Result<int> lowStockCount() const;

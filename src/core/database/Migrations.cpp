@@ -340,6 +340,147 @@ END)"),
     };
 }
 
+// --------------------------------------------------------------------------
+// Migration 5: qist (installments), v2 milestone 3. See docs/QIST.md.
+//  - orders may now be paid by qist (payment_method 'qist'); the order total
+//    stays the cash price
+//  - qist_plans: the plans the admin offers (months, markup, minimum down payment)
+//  - qist_accounts: one per qist order, with the plan's terms copied onto it.
+//    The terms never change. The status starts 'active'; 'cancelled' is final,
+//    and a completed qist never becomes active again.
+//  - qist_installments: the schedule (0 = down payment). It never changes.
+//  - khata_entries.qist_id: the qist price and every installment received go
+//    into the customer's khata ledger, linked to their qist. What has been paid
+//    is the sum of those entries, so it is never stored twice.
+//  - products.qist_allowed and khata_accounts.qist_approved: which products may
+//    be sold on qist, and which customers may buy on qist.
+// The ranges below repeat those in qist:: (domain/Qist.h) on purpose: a
+// shipped migration must never change.
+// --------------------------------------------------------------------------
+QStringList migration5()
+{
+    return {
+        // Rebuild orders so the payment method may be 'qist' (as migration 2 did for 'khata').
+        QStringLiteral(R"(
+CREATE TABLE orders_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number    TEXT    NOT NULL UNIQUE,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    status          TEXT    NOT NULL CHECK (status IN ('pending', 'confirmed', 'processing',
+                                                       'shipped', 'delivered', 'cancelled')),
+    subtotal_paisa  INTEGER NOT NULL CHECK (subtotal_paisa >= 0),
+    shipping_paisa  INTEGER NOT NULL CHECK (shipping_paisa >= 0),
+    tax_paisa       INTEGER NOT NULL CHECK (tax_paisa >= 0),
+    total_paisa     INTEGER NOT NULL CHECK (total_paisa = subtotal_paisa + shipping_paisa + tax_paisa),
+    payment_method  TEXT    NOT NULL CHECK (payment_method IN ('cod', 'khata', 'qist')),
+    payment_status  TEXT    NOT NULL CHECK (payment_status IN ('unpaid', 'paid', 'on_account')),
+    ship_name       TEXT    NOT NULL,
+    ship_phone      TEXT    NOT NULL,
+    ship_line1      TEXT    NOT NULL,
+    ship_city       TEXT    NOT NULL,
+    checkout_token  TEXT    NOT NULL UNIQUE,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+))"),
+        QStringLiteral(R"(
+INSERT INTO orders_new (id, order_number, user_id, status, subtotal_paisa, shipping_paisa, tax_paisa,
+                        total_paisa, payment_method, payment_status, ship_name, ship_phone, ship_line1,
+                        ship_city, checkout_token, created_at, updated_at)
+SELECT id, order_number, user_id, status, subtotal_paisa, shipping_paisa, tax_paisa,
+       total_paisa, payment_method, payment_status, ship_name, ship_phone, ship_line1,
+       ship_city, checkout_token, created_at, updated_at
+FROM orders)"),
+        QStringLiteral("DROP TABLE orders"),
+        QStringLiteral("ALTER TABLE orders_new RENAME TO orders"),
+        QStringLiteral("CREATE INDEX idx_orders_user ON orders(user_id)"),
+        QStringLiteral("CREATE INDEX idx_orders_status ON orders(status)"),
+        QStringLiteral("CREATE INDEX idx_orders_created ON orders(created_at)"),
+
+        QStringLiteral("ALTER TABLE products ADD COLUMN qist_allowed INTEGER NOT NULL DEFAULT 0 "
+                       "CHECK (qist_allowed IN (0, 1))"),
+        QStringLiteral("ALTER TABLE khata_accounts ADD COLUMN qist_approved INTEGER NOT NULL DEFAULT 0 "
+                       "CHECK (qist_approved IN (0, 1))"),
+
+        QStringLiteral(R"(
+CREATE TABLE qist_plans (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT    NOT NULL UNIQUE COLLATE NOCASE CHECK (length(name) BETWEEN 1 AND 60),
+    months       INTEGER NOT NULL CHECK (months BETWEEN 2 AND 24),
+    markup_bp    INTEGER NOT NULL CHECK (markup_bp BETWEEN 0 AND 5000),
+    min_down_bp  INTEGER NOT NULL CHECK (min_down_bp BETWEEN 0 AND 9000),
+    is_active    INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL
+))"),
+        QStringLiteral(R"(
+CREATE TABLE qist_accounts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id            INTEGER NOT NULL UNIQUE REFERENCES orders(id) ON DELETE RESTRICT,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    plan_id             INTEGER REFERENCES qist_plans(id) ON DELETE SET NULL,
+    plan_name           TEXT    NOT NULL,
+    months              INTEGER NOT NULL CHECK (months BETWEEN 2 AND 24),
+    markup_bp           INTEGER NOT NULL CHECK (markup_bp BETWEEN 0 AND 5000),
+    min_down_bp         INTEGER NOT NULL CHECK (min_down_bp BETWEEN 0 AND 9000),
+    cash_price_paisa    INTEGER NOT NULL CHECK (cash_price_paisa > 0),
+    markup_paisa        INTEGER NOT NULL CHECK (markup_paisa >= 0),
+    qist_price_paisa    INTEGER NOT NULL CHECK (qist_price_paisa = cash_price_paisa + markup_paisa),
+    down_payment_paisa  INTEGER NOT NULL CHECK (down_payment_paisa >= 0 AND down_payment_paisa < qist_price_paisa),
+    status              TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
+    created_at          TEXT    NOT NULL,
+    updated_at          TEXT    NOT NULL
+))"),
+        QStringLiteral("CREATE INDEX idx_qist_accounts_user ON qist_accounts(user_id)"),
+        // The terms of a qist are what the customer agreed to: they can never be edited.
+        QStringLiteral(R"(
+CREATE TRIGGER trg_qist_accounts_terms_fixed
+BEFORE UPDATE OF order_id, user_id, plan_name, months, markup_bp, min_down_bp, cash_price_paisa,
+                 markup_paisa, qist_price_paisa, down_payment_paisa, created_at ON qist_accounts
+BEGIN
+    SELECT RAISE(ABORT, 'the terms of a qist cannot be changed');
+END)"),
+        // Cancelled is final. A completed qist can still be cancelled (the order was
+        // cancelled before it shipped and the money is returned), but never reopened.
+        QStringLiteral(R"(
+CREATE TRIGGER trg_qist_accounts_status
+BEFORE UPDATE OF status ON qist_accounts
+WHEN (OLD.status = 'cancelled' AND NEW.status <> 'cancelled')
+  OR (OLD.status = 'completed' AND NEW.status = 'active')
+BEGIN
+    SELECT RAISE(ABORT, 'a cancelled qist cannot change and a completed one cannot reopen');
+END)"),
+        QStringLiteral(R"(
+CREATE TRIGGER trg_qist_accounts_no_delete
+BEFORE DELETE ON qist_accounts
+BEGIN
+    SELECT RAISE(ABORT, 'a qist cannot be deleted');
+END)"),
+        QStringLiteral(R"(
+CREATE TABLE qist_installments (
+    qist_id       INTEGER NOT NULL REFERENCES qist_accounts(id) ON DELETE RESTRICT,
+    number        INTEGER NOT NULL CHECK (number BETWEEN 0 AND 24),
+    due_date      TEXT    NOT NULL CHECK (length(due_date) = 10),
+    amount_paisa  INTEGER NOT NULL CHECK (amount_paisa > 0),
+    PRIMARY KEY (qist_id, number)
+) WITHOUT ROWID)"),
+        QStringLiteral(R"(
+CREATE TRIGGER trg_qist_installments_no_update
+BEFORE UPDATE ON qist_installments
+BEGIN
+    SELECT RAISE(ABORT, 'a qist schedule cannot be changed');
+END)"),
+        QStringLiteral(R"(
+CREATE TRIGGER trg_qist_installments_no_delete
+BEFORE DELETE ON qist_installments
+BEGIN
+    SELECT RAISE(ABORT, 'a qist schedule cannot be changed');
+END)"),
+
+        QStringLiteral("ALTER TABLE khata_entries ADD COLUMN qist_id INTEGER REFERENCES qist_accounts(id)"),
+        QStringLiteral("CREATE INDEX idx_khata_qist ON khata_entries(qist_id) WHERE qist_id IS NOT NULL"),
+    };
+}
+
 } // namespace
 
 Migrator::Migrator(QString connectionName)
@@ -354,6 +495,7 @@ const QVector<Migration> &Migrator::migrations()
         {2, QStringLiteral("khata_ledger"), migration2(), true},
         {3, QStringLiteral("wholesale_price_tiers"), migration3()},
         {4, QStringLiteral("wholesale_tier_rules"), migration4()},
+        {5, QStringLiteral("qist_installments"), migration5(), true},
     };
     return all;
 }

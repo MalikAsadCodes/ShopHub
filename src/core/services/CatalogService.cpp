@@ -191,6 +191,8 @@ Status CatalogService::updateProduct(const Session &session, qint64 productId, P
         QString details = input.sku;
         if (existing.value()->price != input.price)
             details += QStringLiteral(" price %1 -> %2").arg(existing.value()->price.toString(), input.price.toString());
+        if (existing.value()->qistAllowed != input.qistAllowed)
+            details += input.qistAllowed ? QStringLiteral(" qist on") : QStringLiteral(" qist off");
         m_repos.audit.log(session.userId(), QStringLiteral("product_updated"), QStringLiteral("product"), productId, details);
     }
     return st;
@@ -204,6 +206,22 @@ Status CatalogService::setProductActive(const Session &session, qint64 productId
     if (st)
         m_repos.audit.log(session.userId(), active ? QStringLiteral("product_activated") : QStringLiteral("product_deactivated"),
                           QStringLiteral("product"), productId);
+    return st;
+}
+
+Status CatalogService::setQistAllowed(const Session &session, qint64 productId, bool allowed)
+{
+    if (auto st = access::requireAdmin(session); !st)
+        return st;
+    auto existing = m_repos.products.findById(productId);
+    if (!existing)
+        return existing.status();
+    if (!existing.value())
+        return Status::fail(QStringLiteral("Product not found."));
+    auto st = m_repos.products.setQistAllowed(productId, allowed);
+    if (st)
+        m_repos.audit.log(session.userId(), allowed ? QStringLiteral("product_qist_on") : QStringLiteral("product_qist_off"),
+                          QStringLiteral("product"), productId, existing.value()->sku);
     return st;
 }
 

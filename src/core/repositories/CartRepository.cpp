@@ -11,7 +11,7 @@ Result<QVector<CartItem>> CartRepository::items(qint64 userId) const
     QSqlQuery q(db());
     q.prepare(QStringLiteral(
         "SELECT p.id, p.sku, p.name, p.image_file, c.name, p.price_paisa, ci.quantity, p.stock, "
-        "       (p.is_active = 1 AND c.is_active = 1) "
+        "       (p.is_active = 1 AND c.is_active = 1), p.qist_allowed "
         "FROM carts ca "
         "JOIN cart_items ci ON ci.cart_id = ca.id "
         "JOIN products p ON p.id = ci.product_id "
@@ -35,6 +35,7 @@ Result<QVector<CartItem>> CartRepository::items(qint64 userId) const
         i.quantity = q.value(6).toInt();
         i.availableStock = q.value(7).toInt();
         i.productActive = q.value(8).toInt() == 1;
+        i.qistAllowed = q.value(9).toInt() == 1;
         out.push_back(i);
     }
     return out;

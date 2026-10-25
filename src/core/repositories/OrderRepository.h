@@ -26,6 +26,7 @@ public:
     Result<QVector<Order>> list(const OrderQuery &query) const;
 
     Status updateStatus(qint64 id, OrderStatus status, const QString &paymentStatus);
+    Status setPaymentStatus(qint64 id, const QString &paymentStatus);
     Status addHistory(qint64 orderId, std::optional<OrderStatus> from, OrderStatus to,
                       qint64 changedBy, const QString &note);
     Result<QVector<OrderStatusChange>> history(qint64 orderId) const;
