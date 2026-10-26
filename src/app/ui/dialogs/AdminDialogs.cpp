@@ -3,6 +3,7 @@
 #include "services/AppContext.h"
 #include "ui/widgets/ImageView.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -69,6 +70,8 @@ ProductEditDialog::ProductEditDialog(UiContext &ui, std::optional<qint64> produc
     m_description = new QPlainTextEdit();
     m_description->setPlaceholderText(QStringLiteral("What should customers know about this product?"));
     m_description->setMinimumHeight(110);
+    m_qist = new QCheckBox(QStringLiteral("Can be sold on qist (installments)"));
+    m_qist->setToolTip(QStringLiteral("Customers the shop allows qist can pay for this product in monthly installments"));
 
     auto *form = new QFormLayout();
     form->setHorizontalSpacing(14);
@@ -82,6 +85,7 @@ ProductEditDialog::ProductEditDialog(UiContext &ui, std::optional<qint64> produc
     form->addRow(makeFormLabel(productId ? QStringLiteral("Stock") : QStringLiteral("Opening stock")), m_stock);
     form->addRow(makeFormLabel(QStringLiteral("Low-stock alert at")), m_lowStock);
     form->addRow(makeFormLabel(QStringLiteral("Description")), m_description);
+    form->addRow(makeFormLabel(QStringLiteral("Qist")), m_qist);
     columns->addLayout(form, 3);
 
     // Image
@@ -144,6 +148,7 @@ ProductEditDialog::ProductEditDialog(UiContext &ui, std::optional<qint64> produc
         m_stock->setToolTip(QStringLiteral("Use the Inventory page to change stock, so every change is recorded."));
         m_lowStock->setValue(prod.lowStockThreshold);
         m_description->setPlainText(prod.description);
+        m_qist->setChecked(prod.qistAllowed);
         m_imageFile = prod.imageFile;
         categoryId = prod.categoryId;
     }
@@ -202,6 +207,7 @@ void ProductEditDialog::save()
     in.initialStock = m_stock->value();
     in.lowStockThreshold = m_lowStock->value();
     in.imageFile = m_imageFile;
+    in.qistAllowed = m_qist->isChecked();
 
     const auto price = Money::parse(m_price->text());
     if (!price) {

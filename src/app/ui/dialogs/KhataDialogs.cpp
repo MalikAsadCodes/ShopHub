@@ -44,11 +44,13 @@ KhataDialog::KhataDialog(UiContext &ui, const KhataAccount &account, Mode mode, 
     v->setContentsMargins(24, 20, 24, 20);
     v->setSpacing(10);
     v->addWidget(makeLabel(title, "h2"));
-    auto *who = makeLabel(QStringLiteral("%1  (%2)\nCredit limit %3  ·  %4")
-                              .arg(account.customerName, account.email,
-                                   account.creditLimit.isZero() ? QStringLiteral("not set") : account.creditLimit.toString(),
-                                   owesText(account.balance)),
-                          "muted");
+    QString summary = QStringLiteral("%1  (%2)\nCredit limit %3  ·  %4")
+                          .arg(account.customerName, account.email,
+                               account.creditLimit.isZero() ? QStringLiteral("not set") : account.creditLimit.toString(),
+                               owesText(account.balance));
+    if (account.qistBalance > Money())
+        summary += QStringLiteral("  (%1 of it on qist, paid on the Qist page)").arg(account.qistBalance.toString());
+    auto *who = makeLabel(summary, "muted");
     who->setWordWrap(true);
     v->addWidget(who);
 
@@ -64,8 +66,8 @@ KhataDialog::KhataDialog(UiContext &ui, const KhataAccount &account, Mode mode, 
         break;
     case Mode::RecordPayment:
         m_amount = field(QStringLiteral("Amount received"));
-        if (account.balance > Money())
-            m_amount->setText(account.balance.toPlainString());
+        if (account.creditUsed() > Money())
+            m_amount->setText(account.creditUsed().toPlainString()); // the khata part; qist is paid on the Qist page
         m_choice = new QComboBox();
         m_choice->setEditable(true);
         m_choice->addItems({QStringLiteral("Cash"), QStringLiteral("Easypaisa"), QStringLiteral("JazzCash"),
@@ -145,7 +147,7 @@ void KhataDialog::updatePreview()
     case Mode::SetLimit:
         m_preview->setText(value->isZero() ? QStringLiteral("Khata will be closed for new orders.")
                                            : QStringLiteral("They can buy up to %1 on khata.")
-                                                 .arg((*value > m_account.balance ? *value - m_account.balance : Money()).toString()));
+                                                 .arg((*value > m_account.creditUsed() ? *value - m_account.creditUsed() : Money()).toString()));
         break;
     case Mode::RecordPayment:
         m_preview->setText(QStringLiteral("New balance: %1").arg((m_account.balance - *value).toString()));

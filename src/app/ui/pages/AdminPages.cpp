@@ -178,9 +178,14 @@ void DashboardPage::refresh()
     m_sales->setValue(s.grossSales.toString(), QStringLiteral("All time"));
     m_orders->setValue(QString::number(s.orderCount),
                        QStringLiteral("Not cancelled  ·  average %1").arg(s.averageOrderValue.toString()));
-    m_khata->setValue(s.khataOutstanding.toString(),
-                      s.khataDebtors > 0 ? QStringLiteral("Owed by %1 customer(s) - see Khata").arg(s.khataDebtors)
-                                         : QStringLiteral("Nobody owes the shop"));
+    QString khataHint = s.khataDebtors > 0 ? QStringLiteral("Owed by %1 customer(s) - see Khata").arg(s.khataDebtors)
+                                           : QStringLiteral("Nobody owes the shop");
+    if (s.qistOutstanding > Money()) {
+        khataHint += QStringLiteral("\nQist: %1 to collect").arg(s.qistOutstanding.toString());
+        if (s.qistOverdue > 0)
+            khataHint += QStringLiteral(", %1 overdue").arg(s.qistOverdue);
+    }
+    m_khata->setValue(s.khataOutstanding.toString(), khataHint);
     m_open->setValue(QString::number(s.pendingOrders),
                      s.pendingOrders > 0 ? QStringLiteral("Pending, confirmed or processing") : QStringLiteral("All caught up"),
                      s.pendingOrders > 0 ? QStringLiteral("small") : QStringLiteral("small"));
@@ -273,7 +278,8 @@ AdminProductsPage::AdminProductsPage(UiContext &ui, QWidget *parent)
 
     m_model = new ProductTableModel({ProductTableModel::Sku, ProductTableModel::Name, ProductTableModel::Category,
                                      ProductTableModel::Brand, ProductTableModel::Price, ProductTableModel::Cost,
-                                     ProductTableModel::Stock, ProductTableModel::Wholesale, ProductTableModel::Status},
+                                     ProductTableModel::Stock, ProductTableModel::Wholesale, ProductTableModel::Qist,
+                                     ProductTableModel::Status},
                                     this);
     m_proxy = new QSortFilterProxyModel(this);
     m_proxy->setSourceModel(m_model);

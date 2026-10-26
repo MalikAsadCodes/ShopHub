@@ -32,6 +32,7 @@ private:
     const KhataAccount *selected() const;
     void loadLedger();
     void openDialog(int mode);
+    void toggleQist();
 
     QLineEdit *m_search = nullptr;
     QCheckBox *m_owingOnly = nullptr;
@@ -45,6 +46,7 @@ private:
     QPushButton *m_limit = nullptr;
     QPushButton *m_payment = nullptr;
     QPushButton *m_adjust = nullptr;
+    QPushButton *m_qist = nullptr;
     QTimer *m_debounce = nullptr;
 };
 

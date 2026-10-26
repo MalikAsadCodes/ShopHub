@@ -10,6 +10,7 @@
 #include "ui/dialogs/AdminDialogs.h"
 #include "ui/dialogs/AuthDialog.h"
 #include "ui/dialogs/KhataDialogs.h"
+#include "ui/dialogs/QistDialogs.h"
 #include "ui/dialogs/ShopDialogs.h"
 #include "ui/pages/Page.h"
 #include "ui/widgets/ProductCard.h"
@@ -433,6 +434,126 @@ private slots:
         QCOMPARE(checkout.placedOrder().items.first().unitPrice, Money::fromPaisa(296910));
     }
 
+    void qistFromCheckoutToPayment()
+    {
+        // ---- customer: Ayesha may buy on qist in the sample data
+        {
+            MainWindow window(*m_ctx, m_customer);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QVERIFY(window.page(QStringLiteral("qist")));
+            window.navigate(QStringLiteral("shop"));
+            QTest::qWait(20);
+            bool badgeShown = false;
+            for (ProductCard *card : window.findChildren<ProductCard *>())
+                for (QLabel *l : card->findChildren<QLabel *>())
+                    badgeShown = badgeShown || l->text() == QStringLiteral("Qist");
+            QVERIFY(badgeShown);
+
+            ProductFilter f;
+            f.text = QStringLiteral("Bluetooth Speaker");
+            const Product speaker = m_ctx->catalog().search(m_customer, f).value().items.first();
+            QVERIFY(speaker.qistAllowed);
+            {
+                ProductDetailsDialog details(window.uiContext(), speaker.id, &window);
+                QVERIFY(details.isLoaded());
+                details.show();
+                QVERIFY(QTest::qWaitForWindowExposed(&details));
+                bool plansShown = false;
+                for (QLabel *l : details.findChildren<QLabel *>())
+                    plansShown = plansShown || l->text() == QStringLiteral("Pay in installments (qist)");
+                QVERIFY(plansShown);
+                shot(&details, "22-product-qist");
+            }
+
+            QVERIFY(m_ctx->cart().clear(m_customer).isOk());
+            QVERIFY(m_ctx->cart().add(m_customer, speaker.id, 1).isOk());
+            CheckoutDialog checkout(window.uiContext(), &window);
+            checkout.resize(960, 700);
+            checkout.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&checkout));
+            QRadioButton *qistRadio = radioWithText(&checkout, QStringLiteral("Qist (installments)"));
+            QVERIFY(qistRadio && qistRadio->isEnabled());
+            QTest::mouseClick(qistRadio, Qt::LeftButton);
+            QVERIFY(qistRadio->isChecked());
+            checkout.selectQistPlan(0); // "3 months, no markup": 25% down
+            bool previewShown = false;
+            for (QLabel *l : checkout.findChildren<QLabel *>())
+                previewShown = previewShown || (l->isVisible() && l->text().startsWith(QStringLiteral("Pay Rs 2,375.00 now")));
+            QVERIFY(previewShown);
+            shot(&checkout, "23-checkout-qist");
+            QPushButton *place = nullptr;
+            for (QPushButton *b : checkout.findChildren<QPushButton *>())
+                if (b->text().startsWith(QStringLiteral("Place order")))
+                    place = b;
+            QVERIFY(place);
+            QTest::mouseClick(place, Qt::LeftButton);
+            QCOMPARE(checkout.result(), int(QDialog::Accepted));
+            QCOMPARE(checkout.placedOrder().paymentMethod, payment::kQist);
+            const QistAccount mine = *m_ctx->qist().forOrder(m_customer, checkout.placedOrder().id).value();
+            QCOMPARE(mine.qistPrice, Money::fromRupees(9499));
+            QCOMPARE(mine.downPayment, Money::fromRupees(2375));
+            m_qistId = mine.id;
+            m_qistOrderId = mine.orderId;
+
+            window.navigate(QStringLiteral("qist"));
+            QTest::qWait(20);
+            auto tables = window.page(QStringLiteral("qist"))->findChildren<QTableView *>();
+            QCOMPARE(tables.size(), 2);
+            QCOMPARE(tables.first()->model()->rowCount(), 1);
+            QCOMPARE(tables.last()->model()->rowCount(), 4); // down payment + 3 months
+            shot(&window, "24-my-qist");
+        }
+
+        // ---- admin: the Qist page, plans, the down payment, delivery
+        MainWindow admin(*m_ctx, m_admin);
+        admin.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&admin));
+        admin.navigate(QStringLiteral("qist"));
+        QTest::qWait(20);
+        auto tables = admin.page(QStringLiteral("qist"))->findChildren<QTableView *>();
+        QCOMPARE(tables.size(), 2);
+        QCOMPARE(tables.first()->model()->rowCount(), 5); // 4 open sample qists + Ayesha's
+        QCOMPARE(tables.first()->model()->index(0, 0).data().toString(), QStringLiteral("Mahnoor Abbasi")); // overdue first
+        QVERIFY(tables.last()->model()->rowCount() > 0);
+        shot(&admin, "25-admin-qist");
+
+        {
+            QistPlansDialog plans(admin.uiContext(), &admin);
+            plans.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&plans));
+            QCOMPARE(plans.planCount(), 3);
+            plans.startNewPlan();
+            plans.fillForm(QStringLiteral("9 months"), 9, QStringLiteral("15"), QStringLiteral("25"));
+            shot(&plans, "26-qist-plans");
+            plans.savePlan();
+            QCOMPARE(plans.planCount(), 4);
+        }
+
+        // Not delivered before the down payment is in.
+        QVERIFY(m_ctx->orders().advance(m_admin, m_qistOrderId, OrderStatus::Confirmed).isOk());
+        QVERIFY(m_ctx->orders().advance(m_admin, m_qistOrderId, OrderStatus::Processing).isOk());
+        QVERIFY(m_ctx->orders().advance(m_admin, m_qistOrderId, OrderStatus::Shipped).isOk());
+        QVERIFY(!m_ctx->orders().advance(m_admin, m_qistOrderId, OrderStatus::Delivered).isOk());
+
+        QistPaymentDialog pay(admin.uiContext(), m_ctx->qist().account(m_admin, m_qistId).value(), &admin);
+        pay.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&pay));
+        QLineEdit *amount = fieldWithPlaceholder(&pay, QStringLiteral("Amount received"));
+        QVERIFY(amount);
+        QCOMPARE(amount->text(), QStringLiteral("2375.00")); // the down payment is suggested
+        shot(&pay, "27-record-installment");
+        pay.save();
+        QCOMPARE(pay.result(), int(QDialog::Accepted));
+        QCOMPARE(m_ctx->qist().account(m_admin, m_qistId).value().paid, Money::fromRupees(2375));
+        QVERIFY(m_ctx->orders().advance(m_admin, m_qistOrderId, OrderStatus::Delivered).isOk());
+
+        // The khata page shows who may buy on qist.
+        admin.navigate(QStringLiteral("khata"));
+        admin.page(QStringLiteral("khata"))->applySearch(QStringLiteral("ayesha.khan"));
+        QVERIFY(buttonWithText(&admin, QStringLiteral("Stop qist")));
+    }
+
     void cleanupTestCase()
     {
         m_ctx.reset();
@@ -453,6 +574,8 @@ private:
     std::unique_ptr<AppContext> m_ctx;
     Session m_admin;
     Session m_customer;
+    qint64 m_qistId = 0;
+    qint64 m_qistOrderId = 0;
 };
 
 // Uses Qt's invisible "offscreen" display when this Qt can really load it, and the

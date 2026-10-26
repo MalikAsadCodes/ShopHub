@@ -6,6 +6,7 @@
 #include <QDialog>
 
 class QCheckBox;
+class QComboBox;
 class QRadioButton;
 class QLabel;
 class QLineEdit;
@@ -36,18 +37,30 @@ public:
     CheckoutDialog(UiContext &ui, QWidget *parent = nullptr);
     const Order &placedOrder() const { return m_order; }
 
+    // For tests: pick a qist plan by its position in the list.
+    void selectQistPlan(int index);
+
 private:
     void placeOrder();
+    void updateQist();          // shows or hides the qist choices and their preview
+    std::optional<Money> qistDown(bool &valid) const; // empty = the plan's minimum
 
     UiContext &m_ui;
     QString m_token; // one per dialog: protects against double submission
     Order m_order;
+    Money m_total;
     QLineEdit *m_name = nullptr;
     QLineEdit *m_phone = nullptr;
     QLineEdit *m_address = nullptr;
     QLineEdit *m_city = nullptr;
     QCheckBox *m_saveAddress = nullptr;
     QRadioButton *m_khata = nullptr;
+    QRadioButton *m_qist = nullptr;
+    QLabel *m_qistHint = nullptr;
+    QWidget *m_qistBox = nullptr;
+    QComboBox *m_qistPlan = nullptr;
+    QLineEdit *m_qistDown = nullptr;
+    QLabel *m_qistPreview = nullptr;
     QLabel *m_error = nullptr;
     QPushButton *m_placeButton = nullptr;
 };

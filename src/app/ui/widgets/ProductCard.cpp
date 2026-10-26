@@ -54,8 +54,19 @@ ProductCard::ProductCard(const Product &product, const QString &imagePath, bool 
     name->setText(shown);
     body->addWidget(name);
 
-    if (!product.brand.isEmpty())
-        body->addWidget(makeLabel(product.brand, "muted"));
+    // Brand on the left; a qist badge on the same line when the product can be bought in installments.
+    if (!product.brand.isEmpty() || product.qistAllowed) {
+        auto *brandRow = new QHBoxLayout();
+        brandRow->setContentsMargins(0, 0, 0, 0);
+        brandRow->addWidget(makeLabel(product.brand, "muted"));
+        brandRow->addStretch();
+        if (product.qistAllowed) {
+            auto *qist = makeBadge(QStringLiteral("Qist"), QStringLiteral("info"));
+            qist->setToolTip(QStringLiteral("Can be bought in monthly installments"));
+            brandRow->addWidget(qist);
+        }
+        body->addLayout(brandRow);
+    }
 
     auto *priceRow = new QHBoxLayout();
     priceRow->setContentsMargins(0, 4, 0, 0);

@@ -31,8 +31,11 @@ KhataPage::KhataPage(UiContext &ui, QWidget *parent)
     m_limit = makeButton(QStringLiteral("Set credit limit..."));
     m_adjust = makeButton(QStringLiteral("Adjust..."), "ghost");
     m_payment = makeButton(QStringLiteral("Record payment..."), "primary");
+    m_qist = makeButton(QStringLiteral("Allow qist"));
     m_limit->setToolTip(QStringLiteral("How much this customer may owe at most. 0 closes the khata."));
     m_adjust->setToolTip(QStringLiteral("Discount, write-off or correction, with a reason"));
+    m_qist->setToolTip(QStringLiteral("Let this customer buy in monthly installments (qist). Existing qists are not affected."));
+    ah->addWidget(m_qist);
     ah->addWidget(m_limit);
     ah->addWidget(m_adjust);
     ah->addWidget(m_payment);
@@ -87,10 +90,11 @@ KhataPage::KhataPage(UiContext &ui, QWidget *parent)
     connect(m_limit, &QPushButton::clicked, this, [this] { openDialog(int(KhataDialog::Mode::SetLimit)); });
     connect(m_payment, &QPushButton::clicked, this, [this] { openDialog(int(KhataDialog::Mode::RecordPayment)); });
     connect(m_adjust, &QPushButton::clicked, this, [this] { openDialog(int(KhataDialog::Mode::Adjust)); });
+    connect(m_qist, &QPushButton::clicked, this, &KhataPage::toggleQist);
     connect(m_table, &QTableView::doubleClicked, this, [this] {
         const KhataAccount *a = selected();
         if (a)
-            openDialog(int(a->balance > Money() ? KhataDialog::Mode::RecordPayment : KhataDialog::Mode::SetLimit));
+            openDialog(int(a->creditUsed() > Money() ? KhataDialog::Mode::RecordPayment : KhataDialog::Mode::SetLimit));
     });
     connect(m_table->selectionModel(), &QItemSelectionModel::currentRowChanged, this, &KhataPage::loadLedger);
 }
@@ -151,8 +155,10 @@ void KhataPage::loadLedger()
 {
     const KhataAccount *a = selected();
     m_limit->setEnabled(a);
-    m_payment->setEnabled(a && a->balance > Money());
+    m_payment->setEnabled(a && a->creditUsed() > Money());
     m_adjust->setEnabled(a);
+    m_qist->setEnabled(a);
+    m_qist->setText(a && a->qistApproved ? QStringLiteral("Stop qist") : QStringLiteral("Allow qist"));
     if (!a) {
         m_ledgerTitle->setText(QStringLiteral("Ledger"));
         m_entries->setEntries({});
@@ -164,6 +170,27 @@ void KhataPage::loadLedger()
         m_entries->setEntries(entries.value());
     else
         emit m_ui.events->toast(entries.error());
+}
+
+void KhataPage::toggleQist()
+{
+    const KhataAccount *a = selected();
+    if (!a)
+        return;
+    const bool allow = !a->qistApproved;
+    const QString name = a->customerName;
+    if (!allow && !confirm(this, QStringLiteral("Stop qist"),
+                           QStringLiteral("Stop new qists for %1? Qists they already have carry on as agreed.").arg(name),
+                           QStringLiteral("Stop qist")))
+        return;
+    const Status st = m_ui.app.qist().setApproved(m_ui.session, a->userId, allow);
+    if (!st) {
+        showError(this, st.error());
+        return;
+    }
+    emit m_ui.events->khataChanged();
+    emit m_ui.events->toast(allow ? QStringLiteral("%1 can now buy on qist").arg(name)
+                                  : QStringLiteral("No new qists for %1").arg(name));
 }
 
 void KhataPage::openDialog(int mode)
@@ -240,6 +267,9 @@ void MyKhataPage::refresh()
 
     if (a.balance.isNegative())
         m_owe->setValue(Money().toString(), QStringLiteral("The shop holds %1 for you").arg((Money() - a.balance).toString()));
+    else if (a.qistBalance > Money())
+        m_owe->setValue(a.balance.toString(), QStringLiteral("Includes %1 on qist - see My qist").arg(a.qistBalance.toString()),
+                        a.overLimit() ? QStringLiteral("error") : QStringLiteral("small"));
     else
         m_owe->setValue(a.balance.toString(), a.balance.isZero() ? QStringLiteral("All paid up") : QStringLiteral("Please pay the shop"),
                         a.overLimit() ? QStringLiteral("error") : QStringLiteral("small"));

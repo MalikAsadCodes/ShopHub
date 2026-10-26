@@ -6,6 +6,7 @@
 #include "ui/pages/AdminPages.h"
 #include "ui/pages/CustomerPages.h"
 #include "ui/pages/KhataPages.h"
+#include "ui/pages/QistPages.h"
 #include "ui/widgets/Widgets.h"
 
 #include <QButtonGroup>
@@ -47,6 +48,7 @@ MainWindow::MainWindow(AppContext &app, const Session &session, QWidget *parent)
         addPage(QStringLiteral("dashboard"), QStringLiteral("Dashboard"), new DashboardPage(m_ui));
         addPage(QStringLiteral("admin-orders"), QStringLiteral("Orders"), new AdminOrdersPage(m_ui));
         addPage(QStringLiteral("khata"), QStringLiteral("Khata"), new KhataPage(m_ui));
+        addPage(QStringLiteral("qist"), QStringLiteral("Qist"), new QistPage(m_ui));
         addPage(QStringLiteral("products"), QStringLiteral("Products"), new AdminProductsPage(m_ui));
         addPage(QStringLiteral("inventory"), QStringLiteral("Inventory"), new InventoryPage(m_ui));
         auto *section = makeLabel(QStringLiteral("STOREFRONT"));
@@ -62,6 +64,7 @@ MainWindow::MainWindow(AppContext &app, const Session &session, QWidget *parent)
         addPage(QStringLiteral("cart"), QStringLiteral("Cart"), new CartPage(m_ui));
         addPage(QStringLiteral("orders"), QStringLiteral("My orders"), new MyOrdersPage(m_ui));
         addPage(QStringLiteral("khata"), QStringLiteral("My khata"), new MyKhataPage(m_ui));
+        addPage(QStringLiteral("qist"), QStringLiteral("My qist"), new MyQistPage(m_ui));
     }
 
     // Events from pages and dialogs

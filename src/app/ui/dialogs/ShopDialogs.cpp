@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QCompleter>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -13,6 +14,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSpinBox>
@@ -42,6 +44,19 @@ QLineEdit *formField(const QString &placeholder)
     e->setAccessibleName(placeholder);
     e->setMinimumHeight(36);
     return e;
+}
+
+QString dayText(const QDate &date)
+{
+    return QLocale(QLocale::English).toString(date, QStringLiteral("d MMM yyyy"));
+}
+
+// "6 × Rs 8,800.00" or "6 × Rs 3,226.00 (last Rs 3,228.90)"
+QString monthlyText(const QistQuote &q)
+{
+    if (q.lastMonthly == q.monthly)
+        return QStringLiteral("%1 × %2").arg(q.terms.months).arg(q.monthly.toString());
+    return QStringLiteral("%1 × %2 (last %3)").arg(q.terms.months).arg(q.monthly.toString(), q.lastMonthly.toString());
 }
 
 const QStringList kCities = {
@@ -124,6 +139,37 @@ ProductDetailsDialog::ProductDetailsDialog(UiContext &ui, qint64 productId, QWid
         }
         bands->setColumnStretch(3, 1);
         info->addLayout(bands);
+    }
+
+    // Qist: what one of this item costs on each plan (delivery is added at checkout).
+    if (m_product.qistAllowed) {
+        auto plans = ui.app.qist().plans(ui.session);
+        if (plans && !plans.value().isEmpty()) {
+            info->addSpacing(6);
+            info->addWidget(makeLabel(QStringLiteral("Pay in installments (qist)"), "h3"));
+            auto *grid = new QGridLayout();
+            grid->setHorizontalSpacing(18);
+            grid->setVerticalSpacing(4);
+            int row = 0;
+            for (const QistPlan &plan : plans.value()) {
+                auto q = qist::quote(plan.terms, m_product.price, std::nullopt, QistService::today());
+                if (!q)
+                    continue; // too small for this plan
+                grid->addWidget(makeLabel(plan.name, "muted"), row, 0);
+                grid->addWidget(makeLabel(QStringLiteral("%1 down").arg(q.value().downPayment.toString())), row, 1);
+                grid->addWidget(makeLabel(QStringLiteral("then %1").arg(monthlyText(q.value()))), row, 2);
+                ++row;
+            }
+            grid->setColumnStretch(3, 1);
+            info->addLayout(grid);
+            if (ui.session.isCustomer()) {
+                auto eligible = ui.app.qist().myEligibility(ui.session);
+                if (eligible && !eligible.value().approved)
+                    info->addWidget(makeLabel(QStringLiteral("Ask the shop to allow qist for your account."), "small"));
+                else
+                    info->addWidget(makeLabel(QStringLiteral("Choose \"Qist\" at checkout."), "small"));
+            }
+        }
     }
 
     if (!m_product.description.isEmpty()) {
@@ -249,6 +295,31 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
     auto *khataHint = makeLabel(QString(), "small");
     khataHint->setWordWrap(true);
     lv->addWidget(khataHint);
+
+    m_qist = new QRadioButton(QStringLiteral("Qist (installments)"));
+    m_qist->setAccessibleName(QStringLiteral("Pay in installments"));
+    lv->addWidget(m_qist);
+    m_qistHint = makeLabel(QString(), "small");
+    m_qistHint->setWordWrap(true);
+    lv->addWidget(m_qistHint);
+    m_qistBox = new QWidget();
+    auto *qv = new QVBoxLayout(m_qistBox);
+    qv->setContentsMargins(22, 0, 0, 0);
+    qv->setSpacing(6);
+    auto *qrow = new QHBoxLayout();
+    m_qistPlan = new QComboBox();
+    m_qistPlan->setAccessibleName(QStringLiteral("Qist plan"));
+    m_qistPlan->setMinimumHeight(34);
+    m_qistDown = formField(QStringLiteral("Down payment (Rs), empty = the minimum"));
+    qrow->addWidget(m_qistPlan, 1);
+    qrow->addWidget(m_qistDown, 1);
+    qv->addLayout(qrow);
+    m_qistPreview = makeLabel(QString(), "small");
+    m_qistPreview->setWordWrap(true);
+    qv->addWidget(m_qistPreview);
+    m_qistBox->setVisible(false);
+    lv->addWidget(m_qistBox);
+
     auto *online = new QRadioButton(QStringLiteral("Card / JazzCash / Easypaisa  (coming soon)"));
     online->setEnabled(false);
     lv->addWidget(online);
@@ -265,6 +336,7 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
     auto items = ui.app.cart().items(ui.session);
     const QVector<CartItem> lines = items ? items.value() : QVector<CartItem>();
     const PriceBreakdown price = ui.app.pricing().price(lines);
+    m_total = price.total;
     rv->addWidget(makeLabel(QStringLiteral("%1 item(s)").arg(price.itemCount), "small"));
 
     for (const CartItem &c : lines) {
@@ -299,13 +371,47 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
         khataHint->setText(QStringLiteral("Khata is not open for your account. Ask the shop to give you a credit limit."));
     } else {
         const KhataAccount &k = khata.value();
-        const bool fits = k.balance + price.total <= k.creditLimit;
+        const bool fits = k.creditUsed() + price.total <= k.creditLimit;
         m_khata->setEnabled(fits);
         khataHint->setText(fits ? QStringLiteral("Available credit %1 of your %2 limit. Pay the shop later.")
                                       .arg(k.available().toString(), k.creditLimit.toString())
                                 : QStringLiteral("Available credit is %1, less than this order. Pay some of your khata first.")
                                       .arg(k.available().toString()));
     }
+
+    // Qist is offered when the shop allows it for this customer and every item in the
+    // cart can be sold on qist. CheckoutService checks all of it again when the order is placed.
+    QString qistProblem;
+    auto eligible = ui.app.qist().myEligibility(ui.session);
+    if (!eligible) {
+        qistProblem = eligible.error();
+    } else if (!eligible.value().approved) {
+        qistProblem = QStringLiteral("Qist is not open for your account. Ask the shop to allow qist.");
+    } else if (eligible.value().overdue > Money()) {
+        qistProblem = QStringLiteral("You have installments overdue (%1). Pay them first to start a new qist.")
+                          .arg(eligible.value().overdue.toString());
+    } else if (eligible.value().plans.isEmpty()) {
+        qistProblem = QStringLiteral("The shop has no qist plans yet.");
+    } else {
+        QStringList notAllowed;
+        for (const CartItem &c : lines) {
+            if (!c.qistAllowed)
+                notAllowed << c.name;
+        }
+        if (!notAllowed.isEmpty())
+            qistProblem = QStringLiteral("Not sold on qist: %1.").arg(notAllowed.join(QStringLiteral(", ")));
+        for (const QistPlan &plan : eligible.value().plans)
+            m_qistPlan->addItem(QStringLiteral("%1  ·  %2% markup  ·  %3% down")
+                                    .arg(plan.name, pricetier::percentText(plan.terms.markupBp),
+                                         pricetier::percentText(plan.terms.minDownBp)),
+                                plan.id);
+    }
+    m_qist->setEnabled(qistProblem.isEmpty() && !lines.isEmpty());
+    m_qistHint->setText(qistProblem.isEmpty() ? QStringLiteral("Pay part now and the rest in fixed monthly installments.")
+                                              : qistProblem);
+    connect(m_qist, &QRadioButton::toggled, this, &CheckoutDialog::updateQist);
+    connect(m_qistPlan, qOverload<int>(&QComboBox::currentIndexChanged), this, &CheckoutDialog::updateQist);
+    connect(m_qistDown, &QLineEdit::textChanged, this, &CheckoutDialog::updateQist);
 
     const Money threshold = ui.app.pricing().rules().freeShippingThreshold;
     if (!price.shipping.isZero() && price.subtotal < threshold)
@@ -334,10 +440,67 @@ CheckoutDialog::CheckoutDialog(UiContext &ui, QWidget *parent)
         m_error->setText(items.error());
 }
 
+void CheckoutDialog::selectQistPlan(int index)
+{
+    m_qistPlan->setCurrentIndex(index);
+}
+
+std::optional<Money> CheckoutDialog::qistDown(bool &valid) const
+{
+    valid = true;
+    const QString text = m_qistDown->text().trimmed();
+    if (text.isEmpty())
+        return std::nullopt;
+    const auto down = Money::parse(text);
+    valid = down.has_value();
+    return down;
+}
+
+void CheckoutDialog::updateQist()
+{
+    const bool on = m_qist->isChecked();
+    m_qistBox->setVisible(on);
+    m_placeButton->setText(QStringLiteral("Place order  ·  %1").arg(m_total.toString()));
+    if (!on)
+        return;
+
+    bool valid = true;
+    const std::optional<Money> down = qistDown(valid);
+    if (!valid) {
+        m_qistPreview->setText(QStringLiteral("Enter the down payment in rupees, or leave it empty for the minimum."));
+        return;
+    }
+    auto q = m_ui.app.qist().quote(m_ui.session, m_qistPlan->currentData().toLongLong(), m_total, down);
+    if (!q) {
+        m_qistPreview->setText(q.error());
+        return;
+    }
+    const QistQuote &v = q.value();
+    QString text = QStringLiteral("Pay %1 now (at least %2), then %3 monthly.")
+                       .arg(v.downPayment.toString(), v.minimumDown.toString(), monthlyText(v));
+    text += QStringLiteral("\nQist price %1").arg(v.qistPrice.toString());
+    if (!v.markup.isZero())
+        text += QStringLiteral(" (%1 + %2 markup)").arg(v.cashPrice.toString(), v.markup.toString());
+    for (const QistInstallment &line : v.schedule) {
+        if (line.number == 1) {
+            text += QStringLiteral(". First installment due %1.").arg(dayText(line.dueDate));
+            break;
+        }
+    }
+    m_qistPreview->setText(text);
+    m_placeButton->setText(QStringLiteral("Place order  ·  %1 now").arg(v.downPayment.toString()));
+}
+
 void CheckoutDialog::placeOrder()
 {
     if (!m_placeButton->isEnabled())
         return;
+    bool downValid = true;
+    const std::optional<Money> down = qistDown(downValid);
+    if (m_qist->isChecked() && !downValid) {
+        m_error->setText(QStringLiteral("Enter the down payment in rupees, or leave it empty for the minimum."));
+        return;
+    }
     const QString idle = m_placeButton->text();
     m_placeButton->setEnabled(false);
     m_placeButton->setText(QStringLiteral("Placing your order..."));
@@ -347,7 +510,13 @@ void CheckoutDialog::placeOrder()
     req.checkoutToken = m_token;
     req.shipping = {m_name->text(), m_phone->text(), m_address->text(), m_city->text()};
     req.saveAsDefaultAddress = m_saveAddress->isChecked();
-    req.paymentMethod = m_khata->isChecked() ? payment::kKhata : payment::kCashOnDelivery;
+    req.paymentMethod = m_khata->isChecked()  ? payment::kKhata
+                        : m_qist->isChecked() ? payment::kQist
+                                              : payment::kCashOnDelivery;
+    if (m_qist->isChecked()) {
+        req.qistPlanId = m_qistPlan->currentData().toLongLong();
+        req.qistDownPayment = down;
+    }
 
     auto result = m_ui.app.checkout().placeOrder(m_ui.session, req);
     if (!result) {
@@ -360,6 +529,8 @@ void CheckoutDialog::placeOrder()
     m_order = result.value();
     emit m_ui.events->cartChanged();
     emit m_ui.events->ordersChanged();
+    if (m_order.paymentMethod == payment::kQist)
+        emit m_ui.events->khataChanged();
     accept();
 }
 
@@ -404,8 +575,21 @@ void OrderDetailsDialog::reload()
     header->addStretch();
     v->addLayout(header);
 
+    std::optional<QistAccount> qistAccount;
+    if (m_order.paymentMethod == payment::kQist) {
+        if (auto found = m_ui.app.qist().forOrder(m_ui.session, m_orderId))
+            qistAccount = found.value();
+    }
+
     QString paymentNote;
-    if (m_order.paymentStatus == payment::kPaid)
+    if (qistAccount) {
+        if (qistAccount->state == QistState::Cancelled)
+            paymentNote = QStringLiteral("Qist cancelled");
+        else if (qistAccount->state == QistState::Completed)
+            paymentNote = QStringLiteral("Qist paid in full");
+        else
+            paymentNote = QStringLiteral("%1 paid of %2").arg(qistAccount->paid.toString(), qistAccount->qistPrice.toString());
+    } else if (m_order.paymentStatus == payment::kPaid)
         paymentNote = QStringLiteral("Paid");
     else if (m_order.paymentMethod == payment::kKhata)
         paymentNote = m_order.status == OrderStatus::Cancelled ? QStringLiteral("Taken off the khata")
@@ -417,6 +601,22 @@ void OrderDetailsDialog::reload()
     if (m_ui.session.isAdmin())
         meta += QStringLiteral("\nCustomer: %1 (%2)").arg(m_order.customerName, m_order.customerEmail);
     v->addWidget(makeLabel(meta, "muted"));
+
+    if (qistAccount && qistAccount->state == QistState::Active) {
+        QString text = QStringLiteral("Qist: %1  ·  qist price %2").arg(qistAccount->planName, qistAccount->qistPrice.toString());
+        if (!qistAccount->markup.isZero())
+            text += QStringLiteral(" (%1 markup)").arg(qistAccount->markup.toString());
+        if (const auto next = qistAccount->nextDue())
+            text += QStringLiteral("\nNext: %1 %2 due %3%4")
+                        .arg(qist::installmentName(next->installment.number, qistAccount->terms.months),
+                             next->remaining().toString(), dayText(next->installment.dueDate),
+                             next->state == InstallmentState::Overdue ? QStringLiteral(" (overdue)") : QString());
+        if (m_ui.session.isAdmin() && !qistAccount->downPaymentPaid())
+            text += QStringLiteral("\nRecord the down payment on the Qist page before marking this order delivered.");
+        auto *qistLabel = makeLabel(text, qistAccount->isOverdue() ? "error" : "small");
+        qistLabel->setWordWrap(true);
+        v->addWidget(qistLabel);
+    }
 
     // Items
     auto *table = new QTableWidget(m_order.items.size(), 5, m_content);

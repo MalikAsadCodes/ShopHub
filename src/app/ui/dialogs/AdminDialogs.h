@@ -6,6 +6,7 @@
 
 #include <QDialog>
 
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -45,6 +46,7 @@ private:
     QSpinBox *m_stock = nullptr;
     QSpinBox *m_lowStock = nullptr;
     QPlainTextEdit *m_description = nullptr;
+    QCheckBox *m_qist = nullptr;
     ImageView *m_preview = nullptr;
     QLabel *m_error = nullptr;
 };

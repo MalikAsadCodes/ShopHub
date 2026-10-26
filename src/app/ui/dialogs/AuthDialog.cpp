@@ -280,6 +280,16 @@ void AuthDialog::doSignIn()
         return;
     }
     m_session = result.value();
+
+    // Sample data from an older ShopHub gets what newer versions added (once, admin only).
+    if (m_session.isAdmin() && DemoSeeder::needsUpgrade(m_app)) {
+        setBusy(m_loginButton, true, QStringLiteral("Sign in"));
+        const Status upgraded = DemoSeeder::upgrade(m_app, m_session);
+        setBusy(m_loginButton, false, QStringLiteral("Sign in"));
+        if (!upgraded)
+            showInfo(this, QStringLiteral("Sample data"),
+                     QStringLiteral("You are signed in, but the sample data could not be updated:\n%1").arg(upgraded.error()));
+    }
     accept();
 }
 
